@@ -1,12 +1,12 @@
-// Works out how the panel chip row changes between two polls, so the applet can
+// Works out how the panel tile row changes between two polls, so the applet can
 // animate only what actually appeared or disappeared instead of rebuilding the
 // whole row (a rebuild would restart every animation).
 //
 // The row is described as a list of ids. Sessions use their session id; the two
-// non-session chips use reserved ids so they animate like everything else:
+// non-session tiles use reserved ids so they animate like everything else:
 //
-//   IDLE     - shown when no session is working
-//   OVERFLOW - shown when more sessions are working than the chip limit allows
+//   IDLE     - shown when nothing is running
+//   OVERFLOW - shown when more sessions run than the tile limit allows
 //
 // Pure: no Cinnamon, no actor - the test suite covers it directly.
 
@@ -14,16 +14,17 @@ var IDLE = "\u0000idle";
 var OVERFLOW = "\u0000overflow";
 
 // previous: ids currently in the row ([] on the first run)
-// sessions: the model's sessions, most interesting first
-// maxChips: how many sessions fit in the row
-function plan(previous, sessions, maxChips) {
-    let limit = Math.max(1, maxChips);
-    let shown = (sessions || []).slice(0, limit);
-    let order = shown.map(function (session) { return session.id; });
+// entries: the displayed entries, most interesting first, each with an `id`
+// maxTiles: how many sessions fit in the row
+function plan(previous, entries, maxTiles) {
+    let limit = Math.max(1, maxTiles);
+    let list = entries || [];
+    let shown = list.slice(0, limit);
+    let order = shown.map(function (entry) { return entry.id; });
 
     if (shown.length === 0) {
         order.push(IDLE);
-    } else if (sessions.length > shown.length) {
+    } else if (list.length > shown.length) {
         order.push(OVERFLOW);
     }
 
@@ -35,7 +36,7 @@ function plan(previous, sessions, maxChips) {
         order: order,
         added: added,
         removed: removed,
-        overflow: Math.max(0, sessions.length - shown.length),
+        overflow: Math.max(0, list.length - shown.length),
         idle: shown.length === 0,
     };
 }
@@ -45,15 +46,15 @@ function isMarker(id) {
     return id === IDLE || id === OVERFLOW;
 }
 
-// What the chip for an id should look like - used to notice that a kept chip
-// needs its label or icon refreshed.
-function sessionFor(id, sessions) {
+// What the tile for an id should look like - used to notice that a kept tile
+// needs its texts or dot refreshed.
+function entryFor(id, entries) {
     if (isMarker(id)) {
         return null;
     }
-    for (let i = 0; i < sessions.length; i++) {
-        if (sessions[i].id === id) {
-            return sessions[i];
+    for (let i = 0; i < (entries || []).length; i++) {
+        if (entries[i].id === id) {
+            return entries[i];
         }
     }
     return null;

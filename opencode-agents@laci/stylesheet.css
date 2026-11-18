@@ -1,0 +1,46 @@
+/* OpenCode Agents applet styling */
+
+.opencode-agents-tiles {
+    spacing: 10px;
+}
+
+/* A tile is a status dot with two lines of text (project over conversation
+   subject). The padding belongs to every tile, not to a come-and-go state
+   class, so nothing can change the tile's size and shuffle the row. */
+.opencode-agents-tile {
+    spacing: 6px;
+    padding: 1px 5px;
+}
+
+/* The dot is sized and coloured from the applet (lib/state.js), because the
+   colour follows the session's state and the size is a setting. */
+.opencode-agents-dot {
+    border-radius: 50%;
+}
+
+.opencode-agents-tile-text {
+    spacing: 0px;
+}
+
+/* The project line is quieter than the conversation subject. */
+.opencode-agents-tile-project {
+    font-size: 0.72em;
+    opacity: 0.75;
+}
+
+.opencode-agents-tile-subject {
+    font-size: 0.95em;
+}
+
+.opencode-agents-tile-overflow {
+    font-size: 0.95em;
+    opacity: 0.8;
+}
+
+.opencode-agents-tile-idle {
+    opacity: 0.55;
+}
+
+.opencode-agents-menu-info {
+    font-weight: bold;
+}

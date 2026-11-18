@@ -12,8 +12,7 @@
             "type": "page",
             "title": "General",
             "sections": [
-                "section-refresh",
-                "section-limits"
+                "section-refresh"
             ]
         },
         "section-refresh": {
@@ -21,15 +20,8 @@
             "title": "Refresh",
             "keys": [
                 "poll-interval",
-                "metadata-refresh"
-            ]
-        },
-        "section-limits": {
-            "type": "section",
-            "title": "Limits",
-            "keys": [
-                "max-sessions",
-                "max-directories"
+                "metadata-refresh",
+                "max-locations"
             ]
         },
         "page-discovery": {
@@ -44,8 +36,8 @@
             "type": "section",
             "title": "Discovery",
             "keys": [
-                "use-daemon",
-                "daemon-file",
+                "use-service",
+                "service-file",
                 "use-proc",
                 "discovery-info"
             ]
@@ -62,8 +54,30 @@
             "type": "page",
             "title": "Panel",
             "sections": [
-                "section-chips",
+                "section-tiles",
                 "section-tooltip"
+            ]
+        },
+        "section-tiles": {
+            "type": "section",
+            "title": "Agent tiles",
+            "keys": [
+                "dot-size",
+                "tile-project-length",
+                "tile-subject-length",
+                "tile-show-project",
+                "tile-show-subject",
+                "tiles-max",
+                "animate-tiles",
+                "hide-when-idle",
+                "tiles-info"
+            ]
+        },
+        "section-tooltip": {
+            "type": "section",
+            "title": "Tooltip",
+            "keys": [
+                "tooltip-lines"
             ]
         },
         "page-menu": {
@@ -99,26 +113,6 @@
                 "click-command",
                 "click-command-info"
             ]
-        },
-        "section-chips": {
-            "type": "section",
-            "title": "Agent chips",
-            "keys": [
-                "chip-icon-size",
-                "chip-title-length",
-                "chip-show-title",
-                "chips-max",
-                "animate-chips",
-                "hide-when-idle"
-            ]
-        },
-        "section-tooltip": {
-            "type": "section",
-            "title": "Tooltip",
-            "keys": [
-                "tooltip-lines",
-                "chips-info"
-            ]
         }
     },
     "poll-interval": {
@@ -129,7 +123,7 @@
         "step": 1,
         "units": "s",
         "description": "Poll interval",
-        "tooltip": "How often every kilo server is asked which sessions are working."
+        "tooltip": "How often every opencode server is asked which agents are working."
     },
     "metadata-refresh": {
         "type": "spinbutton",
@@ -139,50 +133,40 @@
         "step": 5,
         "units": "s",
         "description": "Session details refresh",
-        "tooltip": "How long the title/agent/model information of a session and the project list are cached before being fetched again."
+        "tooltip": "How long the title/agent/model of a session and the project list are cached before being fetched again."
     },
-    "max-sessions": {
+    "max-locations": {
         "type": "spinbutton",
-        "default": 20,
+        "default": 12,
         "min": 1,
-        "max": 100,
-        "step": 5,
-        "units": "sessions",
-        "description": "Sessions fetched per project",
-        "tooltip": "Upper bound on the session list requested for each project directory."
-    },
-    "max-directories": {
-        "type": "spinbutton",
-        "default": 60,
-        "min": 1,
-        "max": 300,
-        "step": 10,
+        "max": 200,
+        "step": 4,
         "units": "projects",
-        "description": "Projects checked per server",
-        "tooltip": "Upper bound on the project directories swept for active sessions, most recently used first."
+        "description": "Projects checked for pending requests",
+        "tooltip": "A permission request or question exists only inside the project that raised it, so the loaded projects are swept for one. This bounds that sweep."
     },
-    "use-daemon": {
+    "use-service": {
         "type": "switch",
         "default": true,
-        "description": "Read the kilo daemon discovery file",
-        "tooltip": "Uses the discovery file written by 'kilo daemon', which contains the port and credentials of the shared server."
+        "description": "Read the opencode service file",
+        "tooltip": "Uses the file the shared server writes when it starts, which carries its url and password."
     },
-    "daemon-file": {
+    "service-file": {
         "type": "entry",
         "default": "",
-        "description": "Discovery file",
-        "dependency": "use-daemon",
-        "tooltip": "Leave empty for ~/.local/state/kilo/daemon.json"
+        "description": "Service file",
+        "dependency": "use-service",
+        "tooltip": "Leave empty for ~/.local/state/opencode/service.json"
     },
     "use-proc": {
         "type": "switch",
         "default": true,
-        "description": "Scan for running kilo servers",
-        "tooltip": "Finds every 'kilo serve' process of this user (including the ones started by the VS Code extension) and reads its port and password. Needed for session status, which only the process running an agent knows."
+        "description": "Scan for running opencode servers",
+        "tooltip": "Finds every 'opencode serve' process of this user and reads its port, for a server started by hand on its own port and never registered."
     },
     "discovery-info": {
         "type": "label",
-        "description": "Session status is kept in the memory of the kilo server process that runs an agent, so this applet queries every server it can find on this machine and merges the answers."
+        "description": "opencode v2 runs one shared background server for every project, and registers it in the service file. This applet reads that registration, so normally one server is all it needs."
     },
     "extra-servers": {
         "type": "textview",
@@ -245,62 +229,76 @@
     },
     "click-command": {
         "type": "entry",
-        "default": "x-terminal-emulator -e kilo -s {id}",
+        "default": "x-terminal-emulator -e opencode --session {id}",
         "dependency": "click-action=command",
         "description": "Command",
-        "tooltip": "Placeholders: {id}, {title}, {dir}, {agent}, {model}, {status}"
+        "tooltip": "Placeholders: {id}, {title}, {project}, {dir}, {agent}, {model}, {status}"
     },
     "click-command-info": {
         "type": "label",
         "description": "The command runs from the applet when you use 'Run command for this session' in a session's submenu."
     },
-    "chip-icon-size": {
+    "dot-size": {
         "type": "spinbutton",
-        "default": 48,
-        "min": 24,
-        "max": 96,
-        "step": 8,
+        "default": 12,
+        "min": 4,
+        "max": 24,
+        "step": 1,
         "units": "pixels",
-        "description": "Agent icon size",
-        "tooltip": "Icon height in the panel; the icon is vector artwork, so any size stays smooth."
+        "description": "Status dot size",
+        "tooltip": "Diameter of the state dot at the head of every tile."
     },
-    "chip-title-length": {
+    "tile-project-length": {
         "type": "spinbutton",
-        "default": 18,
+        "default": 24,
         "min": 4,
         "max": 60,
         "step": 2,
         "units": "characters",
-        "description": "Shortened title length"
+        "description": "Project name length"
     },
-    "chip-show-title": {
+    "tile-subject-length": {
+        "type": "spinbutton",
+        "default": 28,
+        "min": 4,
+        "max": 80,
+        "step": 2,
+        "units": "characters",
+        "description": "Conversation subject length"
+    },
+    "tile-show-project": {
         "type": "switch",
         "default": true,
-        "description": "Show the shortened title next to the icon"
+        "description": "Show the project on the top line"
     },
-    "chips-max": {
+    "tile-show-subject": {
+        "type": "switch",
+        "default": true,
+        "description": "Show the conversation subject on the bottom line"
+    },
+    "tiles-max": {
         "type": "spinbutton",
-        "default": 3,
+        "default": 5,
         "min": 1,
-        "max": 12,
+        "max": 20,
         "step": 1,
         "units": "agents",
         "description": "Agents shown side by side",
-        "tooltip": "Further active agents are counted in a +N chip."
+        "tooltip": "Further active agents are counted in a +N tile."
     },
     "hide-when-idle": {
         "type": "switch",
         "default": false,
         "description": "Hide the panel icon when no agent is working"
     },
-    "chips-info": {
-        "type": "label",
-        "description": "Every active agent shows the same icon next to its shortened title. The icon is Lucide's bot, shipped with the applet; replace icons/lucide-bot.svg to change it. The menu lists every active session with its project, agent, model and status. The applet never shows desktop notifications."
-    },
-    "animate-chips": {
+    "animate-tiles": {
         "type": "switch",
         "default": true,
         "description": "Animate new and finished agents",
-        "tooltip": "A session that starts slides in from the left. One that finishes flashes inverted three times, then slides out to the left. Turn off for instant changes."
+        "tooltip": "A session that starts slides in from the left; one that leaves slides out. While an agent works, its dot pulses. Turn off for instant changes and a steady dot."
+    },
+    "tiles-info": {
+        "type": "label",
+        "description": "Every agent gets a tile: the project over the conversation subject, with a status dot to their left. The dot follows the opencode project studio: red blocked (the agent waits for you), amber working (pulsing), green finished and not yet acknowledged, grey idle. A conversation that stopped within 'Keep finished agents for' shows its green dot too, even if the applet did not watch it run. Clicking a green tile acknowledges it, and it slides away. The menu lists every session with its project, agent, model and status. The applet never shows desktop notifications."
     }
 }

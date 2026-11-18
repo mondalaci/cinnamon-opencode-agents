@@ -1,4 +1,4 @@
-// Easing curves for the chip animations.
+// Easing curves for the tile animations.
 //
 // The animations are driven by the applet itself rather than by Clutter's
 // easing, because Cinnamon applies an actor's final value immediately when
@@ -10,8 +10,8 @@
 // Pure: the test suite checks the curves directly.
 
 var LINEAR = "linear";
-var EASE_OUT = "ease-out";     // fast start, gentle arrival - for chips entering
-var EASE_IN = "ease-in";       // gentle start, fast exit - for chips leaving
+var EASE_OUT = "ease-out";     // fast start, gentle arrival - for tiles entering
+var EASE_IN = "ease-in";       // gentle start, fast exit - for tiles leaving
 
 // progress(elapsed, duration, curve) -> 0..1
 function progress(elapsed, duration, curve) {
@@ -39,25 +39,17 @@ function value(from, to, p) {
     return from + (to - from) * p;
 }
 
-// blinkSchedule(cycles, onMs, offMs) -> [{ at, inverted }]
-//
-// The order a finished chip flashes before it leaves: it turns inverted for
-// onMs, back to normal for offMs, and repeats. The last entry always returns to
-// the normal look, so the chip slides away looking like itself.
-function blinkSchedule(cycles, onMs, offMs) {
-    let steps = [];
-    let at = 0;
-    let total = Math.max(1, cycles);
-    for (let i = 0; i < total; i++) {
-        steps.push({ at: at, inverted: true });
-        at += onMs;
-        steps.push({ at: at, inverted: false });
-        at += offMs;
-    }
-    return steps;
-}
+// The working dot pulses: its opacity breathes between MIN and MAX over PERIOD
+// milliseconds, in phase, so every working tile blinks together. Returns the
+// opacity (0..255) at `elapsed` ms into the cycle.
+var PULSE_MAX_OPACITY = 255;
+var PULSE_MIN_OPACITY = 96;
+var PULSE_PERIOD_MS = 1400;
 
-// How long a blink schedule takes in total.
-function blinkDuration(cycles, onMs, offMs) {
-    return Math.max(1, cycles) * (onMs + offMs);
+function pulseOpacity(elapsed) {
+    let period = PULSE_PERIOD_MS;
+    let t = ((elapsed % period) + period) % period / period;
+    // cosine: starts at the bright end, dips once per period
+    let phase = (1 - Math.cos(2 * Math.PI * t)) / 2;
+    return Math.round(PULSE_MAX_OPACITY - (PULSE_MAX_OPACITY - PULSE_MIN_OPACITY) * phase);
 }

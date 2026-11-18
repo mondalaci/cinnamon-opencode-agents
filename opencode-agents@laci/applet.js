@@ -1,13 +1,21 @@
-// Cinnamon panel applet showing the kilo agents that are working right now.
+// Cinnamon panel applet showing the opencode v2 agents that are working right
+// now.
 //
-// The panel lists one chip per active session, side by side: a pixel-art
-// icon identifying the agent, and the shortened session title next to it.
+// The panel lists one tile per live conversation, side by side. A tile is two
+// lines of text with a status dot to their left:
+//
+//     ●  uhk.io
+//        Fix the widget tests
+//
+// The top line is the project, the bottom line the conversation's subject. The
+// dot carries the state, with the vocabulary and colours of the opencode
+// project studio: red blocked (an agent waits for you), amber working, green
+// finished but not yet acknowledged, grey nothing to do. A working dot pulses;
+// clicking a finished tile acknowledges it and the tile slides away.
+//
 // The menu has the details (project, agent, model, status, cost) and the
-// per-session actions.
-//
-// Working state lives in each kilo server process rather than in the shared
-// database, so the applet discovers every server on the machine and polls
-// them all; see lib/discovery.js and lib/monitor.js.
+// per-session actions. See lib/state.js for the dots and lib/monitor.js for the
+// polling.
 
 const Applet = imports.ui.applet;
 const Clutter = imports.gi.Clutter;
@@ -18,7 +26,7 @@ const Settings = imports.ui.settings;
 const St = imports.gi.St;
 const Util = imports.misc.util;
 
-const UUID = "kilo-agents@laci";
+const UUID = "opencode-agents@laci";
 
 // Make this applet's own lib/ directory importable.
 const APPLET_PATH = imports.ui.appletManager.appletMeta[UUID].path;
@@ -27,24 +35,28 @@ imports.searchPath.unshift(APPLET_PATH);
 const Discovery = imports.lib.discovery;
 const Format = imports.lib.format;
 const AgentIcon = imports.lib.agenticon;
-const ChipDiff = imports.lib.chipdiff;
+const State = imports.lib.state;
+const Tiles = imports.lib.tiles;
 const Easing = imports.lib.easing;
 const Monitor = imports.lib.monitor.Monitor;
 
 const REFRESH_ICON = "view-refresh-symbolic";
 const SETTINGS_ICON = "preferences-system-symbolic";
-const OVERFLOW_STYLE = "kilo-agents-chip-overflow";
+const SEEN_ICON = "object-select-symbolic";
+const OVERFLOW_STYLE = "opencode-agents-tile-overflow";
+const DOT_STYLE = "opencode-agents-dot";
 const IN_ANIMATION_MS = 250;
 const OUT_ANIMATION_MS = 200;
-const BLINK_CYCLES = 3;
-const BLINK_ON_MS = 150;
-const BLINK_OFF_MS = 150;
 const FRAME_MS = 16;
-const INVERTED_STYLE = "kilo-agents-chip-inverted";
-const INVERTED_TEXT_COLOR = "#1a1a1a";
-const QUESTION_STYLE = "kilo-agents-chip-question";
-const QUESTION_TEXT_COLOR = "#1a1a1a";
-const QUESTION_BLINK_MS = 600;
+const PULSE_FRAME_MS = 40;
+const IDLE_ICON_SIZE = 20;
+
+// What the panel is about: a session waiting for a human, one that is running,
+// or a finish nobody has read yet. The monitor also reports the conversations
+// that *have* been read, but only so a dot can never be invented for them.
+function isWorthListing(session) {
+    return !!(session && (session.blocked || session.done || session.status === "running"));
+}
 
 // St.Icon multiplies icon_size by the stage scale factor, while the sizes in the
 // applet's settings are plain pixels, so undo that here.
@@ -58,15 +70,15 @@ function iconSizeFor(pixels) {
     return Math.max(1, Math.round(pixels / scale));
 }
 
-// The ready-made agent icon, rendered as a scalable icon so it stays smooth at
-// any size. Falls back to a theme icon if the shipped file cannot be loaded.
+// The idle icon, rendered as a scalable icon so it stays smooth at any size.
+// Falls back to a theme icon if the shipped file cannot be loaded.
 function createAgentIcon(size) {
     let path = AgentIcon.pathFor(APPLET_PATH);
     let iconSize = iconSizeFor(size);
     try {
         if (Gio.file_new_for_path(path).query_exists(null)) {
             return new St.Icon({
-                style_class: "kilo-agents-chip-icon",
+                style_class: "opencode-agents-idle-icon",
                 gicon: Gio.icon_new_for_string(path),
                 icon_size: iconSize,
             });
@@ -76,14 +88,14 @@ function createAgentIcon(size) {
         global.logError(UUID + ": cannot load icon " + path + ": " + e.message);
     }
     return new St.Icon({
-        style_class: "kilo-agents-chip-icon",
+        style_class: "opencode-agents-idle-icon",
         icon_name: AgentIcon.FALLBACK_ICON_NAME,
         icon_type: St.IconType.SYMBOLIC,
         icon_size: iconSize,
     });
 }
 
-class KiloAgentsApplet extends Applet.Applet {
+class OpencodeAgentsApplet extends Applet.Applet {
     constructor(metadata, orientation, panelHeight, instanceId) {
         super(orientation, panelHeight, instanceId);
 
@@ -93,22 +105,24 @@ class KiloAgentsApplet extends Applet.Applet {
 
         this._model = null;
         this._monitor = null;
-        this._animations = [];   // frame timers of running chip animations
-        this._chips = {};        // session id (or marker id) -> chip actor
-        this._chipIds = [];      // the row as currently drawn, left to right
-        this._chipsAppearance = null;
-        this._chipsRendered = false;
-        this._questionTimer = 0; // the shared waiting-for-an-answer blink
-        this._questionOn = true; // current phase of that blink
+        this._animations = [];    // frame timers of running tile animations
+        this._tiles = {};         // session id (or marker id) -> tile actor
+        this._tileIds = [];       // the row as currently drawn, left to right
+        this._tilesAppearance = null;
+        this._tilesRendered = false;
+        this._states = {};        // session id -> dot state (blocked/working/done/idle)
+        this._known = {};         // session id -> last known session info
+        this._acknowledged = {};  // session id -> true, once the user has seen it
+        this._pulseTimer = 0;
 
-        this._chipsBox = new St.BoxLayout({
-            style_class: "kilo-agents-chips",
+        this._tilesBox = new St.BoxLayout({
+            style_class: "opencode-agents-tiles",
             vertical: this._vertical,
             reactive: false,
         });
-        this._chipsBox.set_x_align(Clutter.ActorAlign.CENTER);
-        this._chipsBox.set_y_align(Clutter.ActorAlign.CENTER);
-        this.actor.add_child(this._chipsBox);
+        this._tilesBox.set_x_align(Clutter.ActorAlign.CENTER);
+        this._tilesBox.set_y_align(Clutter.ActorAlign.CENTER);
+        this.actor.add_child(this._tilesBox);
 
         this._bindSettings(metadata, instanceId);
         this._buildMenu();
@@ -131,20 +145,21 @@ class KiloAgentsApplet extends Applet.Applet {
         this.settings = new Settings.AppletSettings(this, metadata.uuid, instanceId);
 
         this.settings.bind("poll-interval", "pollInterval", this._onMonitorSettingsChanged);
-        this.settings.bind("max-sessions", "maxSessions", this._onMonitorSettingsChanged);
-        this.settings.bind("max-directories", "maxDirectories", this._onMonitorSettingsChanged);
         this.settings.bind("metadata-refresh", "metadataRefresh", this._onMonitorSettingsChanged);
-        this.settings.bind("use-daemon", "useDaemon", this._onMonitorSettingsChanged);
-        this.settings.bind("daemon-file", "daemonFile", this._onMonitorSettingsChanged);
+        this.settings.bind("max-locations", "maxLocations", this._onMonitorSettingsChanged);
+        this.settings.bind("use-service", "useService", this._onMonitorSettingsChanged);
+        this.settings.bind("service-file", "serviceFile", this._onMonitorSettingsChanged);
         this.settings.bind("use-proc", "useProc", this._onMonitorSettingsChanged);
         this.settings.bind("extra-servers", "extraServers", this._onMonitorSettingsChanged);
 
-        this.settings.bind("chips-max", "chipsMax", this._onAppearanceChanged);
-        this.settings.bind("chip-title-length", "chipTitleLength", this._onAppearanceChanged);
-        this.settings.bind("chip-icon-size", "chipIconSize", this._onAppearanceChanged);
-        this.settings.bind("chip-show-title", "chipShowTitle", this._onAppearanceChanged);
+        this.settings.bind("tiles-max", "tilesMax", this._onAppearanceChanged);
+        this.settings.bind("tile-project-length", "tileProjectLength", this._onAppearanceChanged);
+        this.settings.bind("tile-subject-length", "tileSubjectLength", this._onAppearanceChanged);
+        this.settings.bind("tile-show-project", "tileShowProject", this._onAppearanceChanged);
+        this.settings.bind("tile-show-subject", "tileShowSubject", this._onAppearanceChanged);
+        this.settings.bind("dot-size", "dotSize", this._onAppearanceChanged);
         this.settings.bind("hide-when-idle", "hideWhenIdle", this._onAppearanceChanged);
-        this.settings.bind("animate-chips", "animateChips", this._onAppearanceChanged);
+        this.settings.bind("animate-tiles", "animateTiles", this._onAppearanceChanged);
         this.settings.bind("tooltip-lines", "tooltipLines", this._onAppearanceChanged);
 
         this.settings.bind("menu-title-length", "menuTitleLength", this._onAppearanceChanged);
@@ -176,12 +191,11 @@ class KiloAgentsApplet extends Applet.Applet {
         }
         this._monitor = new Monitor({
             intervalSeconds: this.pollInterval,
-            maxSessions: this.maxSessions,
-            maxDirectories: this.maxDirectories,
             metadataTtlSeconds: this.metadataRefresh,
+            maxLocations: this.maxLocations,
             discoverOptions: {
-                useDaemon: this.useDaemon,
-                daemonFile: this.daemonFile ? this.daemonFile : Discovery.defaultDaemonFile(),
+                useService: this.useService,
+                serviceFile: this.serviceFile ? this.serviceFile : Discovery.defaultServiceFile(),
                 useProc: this.useProc,
                 extraServers: this.extraServers,
                 log: (message) => this._log(message),
@@ -195,7 +209,40 @@ class KiloAgentsApplet extends Applet.Applet {
 
     _onModel(model) {
         this._model = model;
+        this._advanceStates(model);
         this._applyModel(model);
+    }
+
+    // Folds the live sessions into the dots, keeping a finished agent visible
+    // until the user acknowledges it. See lib/state.js.
+    _advanceStates(model) {
+        let sessions = model ? model.sessions : [];
+        let present = {};
+        for (let i = 0; i < sessions.length; i++) {
+            let session = sessions[i];
+            present[session.id] = true;
+            this._known[session.id] = session;
+            // A session that runs again needs no acknowledgement any more.
+            let raw = State.rawState(session);
+            if (raw === "blocked" || raw === "working") {
+                delete this._acknowledged[session.id];
+            }
+        }
+        this._states = State.resolve(this._states, sessions, this._acknowledged);
+        for (let id in this._states) {
+            if (this._states[id] === "idle") {
+                delete this._states[id];
+                delete this._known[id];
+            }
+        }
+        // An acknowledgement has to outlive a poll: the monitor keeps reporting
+        // a recently finished conversation, so it is only forgotten once the
+        // session has left the model entirely.
+        for (let id in this._acknowledged) {
+            if (!present[id]) {
+                delete this._acknowledged[id];
+            }
+        }
     }
 
     // ---- panel ---------------------------------------------------------
@@ -205,66 +252,71 @@ class KiloAgentsApplet extends Applet.Applet {
             maxLines: this.tooltipLines,
             showDirectory: true,
         }));
-        this._renderChips(model);
+        this._renderTiles(model);
         this._renderMenu(model);
     }
 
-    // The chip row is diffed against the previous poll and animated: a session
-    // that starts slides in, one that finishes slides out, and chips that stay
-    // are only moved and refreshed.
-    _renderChips(model) {
-        let sessions = model ? model.sessions : [];
-        let appearance = [this.chipsMax, this.chipTitleLength, this.chipIconSize, this.chipShowTitle,
-                          this.hideWhenIdle].join("|");
+    _entries() {
+        let sessions = this._model ? this._model.sessions : [];
+        return State.display(this._states, sessions);
+    }
 
-        if (appearance !== this._chipsAppearance) {
+    // The tile row is diffed against the previous poll and animated: a session
+    // that starts slides in, one that leaves slides out, and tiles that stay
+    // are only moved and refreshed.
+    _renderTiles(model) {
+        let entries = this._entries();
+        let appearance = [this.tilesMax, this.tileProjectLength, this.tileSubjectLength, this.tileShowProject,
+                          this.tileShowSubject, this.dotSize, this.hideWhenIdle].join("|");
+
+        if (appearance !== this._tilesAppearance) {
             // A visual setting changed: rebuild instantly, nothing to animate.
-            this._chipsAppearance = appearance;
-            this._dropChips();
+            this._tilesAppearance = appearance;
+            this._dropTiles();
         }
 
-        let plan = ChipDiff.plan(this._chipIds, sessions, this.chipsMax);
+        let plan = Tiles.plan(this._tileIds, entries, this.tilesMax);
         // the first render is not a transition: nothing to animate yet
-        let animate = this.animateChips && this._chipsRendered;
+        let animate = this.animateTiles && this._tilesRendered;
 
         for (let i = 0; i < plan.removed.length; i++) {
-            this._removeChip(plan.removed[i], animate);
+            this._removeTile(plan.removed[i], animate);
         }
         for (let index = 0; index < plan.order.length; index++) {
             let id = plan.order[index];
-            let actor = this._chips[id];
-            let session = ChipDiff.sessionFor(id, sessions);
+            let actor = this._tiles[id];
+            let entry = Tiles.entryFor(id, entries);
             if (!actor) {
-                actor = this._createChip(id, session, plan.overflow);
-                this._chips[id] = actor;
-                this._chipsBox.add_child(actor);
+                actor = this._createTile(id, entry, plan.overflow);
+                this._tiles[id] = actor;
+                this._tilesBox.add_child(actor);
                 this._animateIn(actor, id, animate);
             } else {
-                this._refreshChip(actor, id, session, plan.overflow);
+                this._refreshTile(actor, id, entry, plan.overflow);
             }
-            this._chipsBox.set_child_at_index(actor, index);
+            this._tilesBox.set_child_at_index(actor, index);
         }
-        this._chipIds = plan.order.slice();
-        this._chipsRendered = true;
-        this._chipsBox.visible = !(sessions.length === 0 && this.hideWhenIdle);
-        this._syncQuestions();
+        this._tileIds = plan.order.slice();
+        this._tilesRendered = true;
+        this._tilesBox.visible = !(entries.length === 0 && this.hideWhenIdle);
+        this._syncPulse();
     }
 
-    _dropChips() {
-        this._stopQuestionBlink();
-        for (let id in this._chips) {
-            this._chips[id].destroy();
+    _dropTiles() {
+        this._stopPulse();
+        for (let id in this._tiles) {
+            this._tiles[id].destroy();
         }
-        this._chips = {};
-        this._chipIds = [];
+        this._tiles = {};
+        this._tileIds = [];
     }
 
-    _createChip(id, session, overflow) {
-        if (id === ChipDiff.IDLE) {
-            return this._chip(null);
+    _createTile(id, entry, overflow) {
+        if (id === Tiles.IDLE) {
+            return this._idleTile();
         }
-        if (id === ChipDiff.OVERFLOW) {
-            let box = new St.BoxLayout({ style_class: "kilo-agents-chip", reactive: false });
+        if (id === Tiles.OVERFLOW) {
+            let box = new St.BoxLayout({ style_class: "opencode-agents-tile", reactive: false });
             box.set_y_align(Clutter.ActorAlign.CENTER);
             box.add_child(new St.Label({
                 text: "+" + overflow,
@@ -273,195 +325,224 @@ class KiloAgentsApplet extends Applet.Applet {
             }));
             return box;
         }
-        return this._chip(session);
+        return this._sessionTile(id, entry);
     }
 
-    // Keeps a chip that is still there in step with its session.
-    _refreshChip(actor, id, session, overflow) {
-        if (id === ChipDiff.OVERFLOW) {
+    // One agent: a status dot, and the project over the conversation subject.
+    _sessionTile(id, entry) {
+        let tile = new St.BoxLayout({
+            style_class: "opencode-agents-tile",
+            reactive: true,
+        });
+        tile.set_y_align(Clutter.ActorAlign.CENTER);
+        tile.set_x_align(Clutter.ActorAlign.CENTER);
+
+        let dot = new St.Widget({ style_class: DOT_STYLE });
+        dot.set_size(this.dotSize, this.dotSize);
+        dot.set_x_align(Clutter.ActorAlign.CENTER);
+        dot.set_y_align(Clutter.ActorAlign.CENTER);
+        tile.add_child(dot);
+        tile._ocDot = dot;
+
+        let text = new St.BoxLayout({
+            style_class: "opencode-agents-tile-text",
+            vertical: true,
+            reactive: false,
+        });
+        text.set_y_align(Clutter.ActorAlign.CENTER);
+        text.set_x_align(Clutter.ActorAlign.START);
+        tile.add_child(text);
+        tile._ocText = text;
+        tile._ocProject = null;
+        tile._ocSubject = null;
+        tile._ocId = id;
+
+        // Clicking a tile acknowledges its finished agent (the green dot) and
+        // opens the menu, so the user can act on the session.
+        tile.connect("button-release-event", () => {
+            this._acknowledge(id);
+            if (!this.menu.isOpen) {
+                this.menu.open();
+            }
+            return true;
+        });
+
+        this._refreshTile(tile, id, entry, 0);
+        return tile;
+    }
+
+    // The idle marker: a dimmed robot icon, or nothing when the row is hidden.
+    _idleTile() {
+        let tile = new St.BoxLayout({ style_class: "opencode-agents-tile opencode-agents-tile-idle", reactive: false });
+        tile.set_y_align(Clutter.ActorAlign.CENTER);
+        tile.add_child(createAgentIcon(IDLE_ICON_SIZE));
+        return tile;
+    }
+
+    // Keeps a tile that is still there in step with its session.
+    _refreshTile(actor, id, entry, overflow) {
+        if (id === Tiles.OVERFLOW) {
             let label = actor.get_children()[0];
             label.set_text("+" + overflow);
             return;
         }
-        if (!session) {
+        if (id === Tiles.IDLE || !entry) {
             return;
         }
-        this._syncChipTitle(actor, session);
-        this._syncChipQuestion(actor, session.statusType === "question");
-    }
+        let session = this._known[id] || null;
+        let state = entry.state;
 
-    // One agent: icon on the left, shortened title on the right. A null
-    // session renders the idle chip.
-    _chip(session) {
-        let chip = new St.BoxLayout({
-            style_class: session ? "kilo-agents-chip" : "kilo-agents-chip kilo-agents-chip-idle",
-            vertical: this._vertical,
-            reactive: false,
-        });
-        chip.set_y_align(Clutter.ActorAlign.CENTER);
-        chip.set_x_align(Clutter.ActorAlign.CENTER);
+        this._paintDot(actor._ocDot, state);
 
-        chip.add_child(createAgentIcon(this.chipIconSize));
-        chip._kiloIcon = chip.get_children()[0];
-        chip._kiloIconPath = AgentIcon.pathFor(APPLET_PATH);
-        chip._kiloIconPathInverted = AgentIcon.invertedPathFor(APPLET_PATH);
-        chip._kiloQuestion = false;
-
-        if (this._wantsTitle(session)) {
-            chip._kiloLabel = this._addChipLabel(chip, session);
+        let text = actor._ocText;
+        if (!text) {
+            return;
         }
-        return chip;
+        let wantsProject = this.tileShowProject && session && session.project;
+        let wantsSubject = this.tileShowSubject && session && session.title;
+        this._syncLabel(actor, "_ocProject", text, wantsProject ? Format.truncate(session.project, this.tileProjectLength) : null,
+            "opencode-agents-tile-project", 0);
+        this._syncLabel(actor, "_ocSubject", text, wantsSubject ? Format.truncate(session.title, this.tileSubjectLength) : null,
+            "opencode-agents-tile-subject", 1);
+        text.visible = !!(wantsProject || wantsSubject);
     }
 
-    // A session that waits for an answer always shows its name: that is what
-    // tells the user which session is asking.
-    _wantsTitle(session) {
-        return !!(session && (this.chipShowTitle || session.statusType === "question"));
-    }
-
-    _addChipLabel(chip, session) {
-        let label = new St.Label({
-            text: Format.truncate(session.title, this.chipTitleLength),
-            style_class: "kilo-agents-chip-title",
-        });
-        label.set_y_align(Clutter.ActorAlign.CENTER);
-        chip.add_child(label);
-        return label;
-    }
-
-    // Adds, updates or drops the session name, so a question can bring the
-    // title back on its own and the "show the title" setting can take it away.
-    _syncChipTitle(actor, session) {
-        let wanted = this._wantsTitle(session) ? Format.truncate(session.title, this.chipTitleLength) : null;
-        let label = actor._kiloLabel;
-        if (wanted === null) {
+    // Adds, updates or drops one of a tile's two lines, so a setting change or
+    // a missing value does not leave a stale label behind.
+    _syncLabel(tile, slot, text, wanted, styleClass, index) {
+        let label = tile[slot];
+        if (wanted === null || wanted === "") {
             if (label) {
-                actor.remove_child(label);
+                text.remove_child(label);
                 label.destroy();
-                actor._kiloLabel = null;
+                tile[slot] = null;
             }
             return;
         }
         if (!label) {
-            actor._kiloLabel = this._addChipLabel(actor, session);
+            label = new St.Label({ text: wanted, style_class: styleClass });
+            label.set_x_align(Clutter.ActorAlign.START);
+            tile[slot] = label;
+            text.insert_child_at_index(label, Math.min(index, text.get_children().length));
         } else if (label.get_text() !== wanted) {
             label.set_text(wanted);
         }
     }
 
-    // ---- waiting for an answer -----------------------------------------
-
-    // Marks a chip as waiting and paints the current blink phase.
-    _syncChipQuestion(actor, question) {
-        actor._kiloQuestion = !!question;
-        this._setQuestionHighlight(actor, actor._kiloQuestion && this._questionOn);
+    // The status dot: the studio's colour, plus the pulse for a working agent.
+    _paintDot(dot, state) {
+        if (!dot) {
+            return;
+        }
+        dot.set_style("background-color: " + State.color(state) + "; border-radius: " + (this.dotSize / 2) + "px;");
+        dot.opacity = 255;
     }
 
-    // The amber "waiting for an answer" look: the panel's own tone replaced by
-    // the amber background, with the dark artwork and dark title on top of it.
-    _setQuestionHighlight(actor, on) {
-        if (on) {
-            actor.add_style_class_name(QUESTION_STYLE);
-        } else {
-            actor.remove_style_class_name(QUESTION_STYLE);
-        }
-        let icon = actor._kiloIcon;
-        if (icon && actor._kiloIconPath) {
-            try {
-                icon.set_gicon(Gio.icon_new_for_string(on ? actor._kiloIconPathInverted : actor._kiloIconPath));
-            } catch (e) {
-                this._error("cannot switch the chip icon", e);
-            }
-        }
-        if (actor._kiloLabel) {
-            actor._kiloLabel.set_style(on ? "color: " + QUESTION_TEXT_COLOR + ";" : null);
-        }
-    }
+    // ---- the working pulse ---------------------------------------------
 
-    // One timer drives every waiting chip: it flips the amber look on and off
-    // while at least one session waits for an answer, and stops as soon as the
-    // last one is answered. The phase is driven here rather than by a CSS
-    // animation, because Cinnamon applies a halted animation's end state
-    // immediately when desktop animations are switched off, which is also why
-    // the "animate new and finished agents" setting is the switch that matters.
-    _syncQuestions() {
-        let waiting = false;
-        for (let id in this._chips) {
-            if (this._chips[id]._kiloQuestion) {
-                waiting = true;
+    // One timer drives every working dot, matching the studio's pulsing
+    // "working" dot. It runs only while at least one agent works, and only
+    // with the animation setting on; otherwise the dots stay solid.
+    _syncPulse() {
+        let working = false;
+        for (let id in this._tiles) {
+            if (this._states[id] === "working") {
+                working = true;
                 break;
             }
         }
-
-        if (waiting && this.animateChips) {
-            if (!this._questionTimer) {
-                this._questionOn = true;
-                this._questionTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, QUESTION_BLINK_MS, () => {
-                    this._questionOn = !this._questionOn;
-                    this._paintQuestions(this._questionOn);
+        if (working && this.animateTiles) {
+            if (!this._pulseTimer) {
+                let started = GLib.get_monotonic_time() / 1000;
+                this._pulseTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, PULSE_FRAME_MS, () => {
+                    let elapsed = GLib.get_monotonic_time() / 1000 - started;
+                    this._paintPulse(elapsed);
                     return GLib.SOURCE_CONTINUE;
                 });
+                this._paintPulse(0);
             }
             return;
         }
-
-        this._stopQuestionBlink();
+        this._stopPulse();
     }
 
-    // With the blink off (no animation setting, or nothing waiting) the chips
-    // stay highlighted, so the distinction survives a static panel.
-    _stopQuestionBlink() {
-        if (this._questionTimer) {
-            GLib.source_remove(this._questionTimer);
-            this._questionTimer = 0;
+    _stopPulse() {
+        if (this._pulseTimer) {
+            GLib.source_remove(this._pulseTimer);
+            this._pulseTimer = 0;
         }
-        this._questionOn = true;
-        this._paintQuestions(true);
+        this._paintPulse(0);
     }
 
-    _paintQuestions(on) {
-        for (let id in this._chips) {
-            let chip = this._chips[id];
-            if (chip && chip._kiloQuestion) {
-                this._setQuestionHighlight(chip, on);
+    _paintPulse(elapsed) {
+        let opacity = Easing.pulseOpacity(elapsed);
+        for (let id in this._tiles) {
+            let tile = this._tiles[id];
+            if (tile && tile._ocDot && this._states[id] === "working") {
+                tile._ocDot.opacity = opacity;
             }
         }
     }
 
-    // The "negative" of a chip: dark artwork on the panel's text tone. Used for
-    // the three flashes a finished chip makes before it leaves.
-    _setInverted(actor, inverted) {
-        if (inverted) {
-            actor.add_style_class_name(INVERTED_STYLE);
-        } else {
-            actor.remove_style_class_name(INVERTED_STYLE);
+    // ---- acknowledging a finished agent --------------------------------
+
+    // Only a finished (green) agent can be acknowledged; clicking a working or
+    // blocked tile just opens the menu. Marking a live session would otherwise
+    // swallow the green dot the moment it finishes.
+    _acknowledge(id) {
+        if (!id || Tiles.isMarker(id) || this._states[id] !== "done") {
+            return;
         }
-        let icon = actor._kiloIcon;
-        if (icon && actor._kiloIconPath) {
-            try {
-                icon.set_gicon(Gio.icon_new_for_string(inverted ? actor._kiloIconPathInverted : actor._kiloIconPath));
-            } catch (e) {
-                this._error("cannot switch the chip icon", e);
+        let session = this._known[id] || null;
+        this._acknowledged[id] = true;
+        this._states[id] = "idle";
+        delete this._known[id];
+        this._view(session);
+        this._renderTiles(this._model);
+        this._renderMenu(this._model);
+    }
+
+    _acknowledgeAll() {
+        let finished = [];
+        for (let id in this._states) {
+            if (this._states[id] === "done") {
+                if (this._known[id]) {
+                    finished.push(this._known[id]);
+                }
+                this._acknowledged[id] = true;
+                this._states[id] = "idle";
+                delete this._known[id];
             }
         }
-        let label = actor._kiloLabel;
-        if (label) {
-            if (inverted) {
-                label.set_style("color: " + INVERTED_TEXT_COLOR + ";");
-            } else {
-                label.set_style(null);
-            }
+        for (let i = 0; i < finished.length; i++) {
+            this._view(finished[i]);
+        }
+        this._renderTiles(this._model);
+        this._renderMenu(this._model);
+    }
+
+    // Tell the server the finish has been looked at, so the studio (and the TUI)
+    // drop their own dot for the same conversation. The panel has already
+    // cleared it here, so this is best effort.
+    _view(session) {
+        if (!this._monitor || !session || typeof this._monitor.view !== "function") {
+            return;
+        }
+        try {
+            this._monitor.view(session);
+        } catch (e) {
+            this._error("cannot mark the session viewed", e);
         }
     }
 
     // ---- animation -----------------------------------------------------
 
-    // Slides a chip in from the left, fading it in.
+    // Slides a tile in from the left, fading it in.
     _animateIn(actor, id, animate) {
         if (!animate) {
             return;
         }
-        let distance = id === ChipDiff.IDLE ? 0 : this._slideDistance();
+        let distance = id === Tiles.IDLE ? 0 : this._slideDistance();
         actor.set_opacity(0);
         actor.set_translation(-distance, 0, 0);
         this._slide(actor, {
@@ -474,74 +555,29 @@ class KiloAgentsApplet extends Applet.Applet {
         });
     }
 
-    // Removes a chip. A session that finished flashes inverted three times
-    // first, then slides out; the idle/overflow markers just slide out.
-    _removeChip(id, animate) {
-        let actor = this._chips[id];
-        delete this._chips[id];
+    // Slides a tile out to the left, fading it out, then destroys it. The tiles
+    // to its right are pulled left by the same width for the duration, so the
+    // row does not jump when the actor finally disappears.
+    _removeTile(id, animate) {
+        let actor = this._tiles[id];
+        delete this._tiles[id];
         if (!actor) {
             return;
-        }
-        // An answered session stops blinking before it leaves: the exit starts
-        // from the normal look, whatever phase the blink was in.
-        if (actor._kiloQuestion) {
-            this._syncChipQuestion(actor, false);
         }
         if (!animate) {
             actor.destroy();
             return;
         }
-
-        if (ChipDiff.isMarker(id) || id.indexOf("ses_") !== 0) {
-            this._slideOut(actor, id);
-            return;
-        }
-        this._flashThenSlideOut(actor, id);
+        this._slideOut(actor, id);
     }
 
-    // Blinks the chip inverted and then hands over to the exit slide.
-    _flashThenSlideOut(actor, id) {
-        let self = this;
-        let schedule = Easing.blinkSchedule(BLINK_CYCLES, BLINK_ON_MS, BLINK_OFF_MS);
-        let started = GLib.get_monotonic_time() / 1000;
-        let step = 0;
-
-        let tick = function () {
-            let elapsed = GLib.get_monotonic_time() / 1000 - started;
-            while (step < schedule.length && schedule[step].at <= elapsed) {
-                let entry = schedule[step];
-                step++;
-                try {
-                    self._setInverted(actor, entry.inverted);
-                } catch (e) {
-                    // the actor is gone: stop flashing and let it be
-                    return GLib.SOURCE_REMOVE;
-                }
-            }
-            if (step >= schedule.length) {
-                self._slideOut(actor, id);
-                return GLib.SOURCE_REMOVE;
-            }
-            return GLib.SOURCE_CONTINUE;
-        };
-
-        // start inverted immediately, then let the frames drive the rest
-        this._setInverted(actor, schedule[0].inverted);
-        step = 1;
-        let timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, FRAME_MS, tick);
-        this._animations.push(timer);
-    }
-
-    // Slides a chip out to the left, fading it out, then destroys it. The chips
-    // to its right are pulled left by the same width for the duration, so the
-    // row does not jump when the actor finally disappears.
     _slideOut(actor, id) {
-        let index = this._chipIds.indexOf(id);
-        let width = actor.get_width() + this._chipSpacing();
+        let index = this._tileIds.indexOf(id);
+        let width = actor.get_width() + this._tileSpacing();
         let following = [];
         if (index >= 0 && width > 0) {
-            for (let i = index + 1; i < this._chipIds.length; i++) {
-                let sibling = this._chips[this._chipIds[i]];
+            for (let i = index + 1; i < this._tileIds.length; i++) {
+                let sibling = this._tiles[this._tileIds[i]];
                 if (!sibling) {
                     continue;
                 }
@@ -575,7 +611,7 @@ class KiloAgentsApplet extends Applet.Applet {
         });
     }
 
-    // Moves a chip right or left by taking the space back over several frames.
+    // Moves a tile right or left by taking the space back over several frames.
     // Cinnamon skips Clutter easing when desktop animations are off, so the
     // interpolation is done here.
     _slide(actor, options) {
@@ -619,12 +655,12 @@ class KiloAgentsApplet extends Applet.Applet {
     }
 
     _slideDistance() {
-        return Math.max(24, this.chipIconSize + 12);
+        return Math.max(24, this.dotSize + 12);
     }
 
-    _chipSpacing() {
+    _tileSpacing() {
         try {
-            let spacing = this._chipsBox.get_theme_node().get_length("spacing");
+            let spacing = this._tilesBox.get_theme_node().get_length("spacing");
             return spacing > 0 ? spacing : 8;
         } catch (e) {
             return 8;
@@ -645,6 +681,10 @@ class KiloAgentsApplet extends Applet.Applet {
         this.menu.addMenuItem(this._serversSection);
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        this._seenItem = new PopupMenu.PopupIconMenuItem("Mark finished agents as seen", SEEN_ICON, St.IconType.SYMBOLIC);
+        this._seenItem.connect("activate", () => this._acknowledgeAll());
+        this.menu.addMenuItem(this._seenItem);
 
         this._refreshItem = new PopupMenu.PopupIconMenuItem("Refresh now", REFRESH_ICON, St.IconType.SYMBOLIC);
         this._refreshItem.connect("activate", () => {
@@ -667,27 +707,38 @@ class KiloAgentsApplet extends Applet.Applet {
 
     _infoLabel(model) {
         if (!model) {
-            return "Kilo Agents - scanning for servers\u2026";
+            return "OpenCode Agents - scanning for servers\u2026";
         }
         let parts = [model.active + " active"];
-        if (model.question) {
-            parts.push(model.question + " awaiting your answer");
+        if (model.blocked) {
+            parts.push(model.blocked + " blocked");
         }
-        if (model.busy) {
-            parts.push(model.busy + " working");
+        if (model.working) {
+            parts.push(model.working + " working");
         }
-        if (model.retry) {
-            parts.push(model.retry + " retrying");
-        }
-        if (model.offline) {
-            parts.push(model.offline + " reconnecting");
+        let done = this._doneCount();
+        if (done) {
+            parts.push(done + " finished");
         }
         parts.push(Format.serverSummary(model));
-        return "Kilo Agents - " + parts.join(", ");
+        return "OpenCode Agents - " + parts.join(", ");
+    }
+
+    // How many agents are finished but not yet acknowledged.
+    _doneCount() {
+        let done = 0;
+        for (let id in this._states) {
+            if (this._states[id] === "done") {
+                done++;
+            }
+        }
+        return done;
     }
 
     _renderMenu(model) {
+        let done = this._doneCount();
         this._infoItem.setLabel(this._infoLabel(model));
+        this._seenItem.setSensitive(done > 0);
         this._serversSection.removeAll();
 
         if (!model) {
@@ -696,7 +747,9 @@ class KiloAgentsApplet extends Applet.Applet {
 
         for (let i = 0; i < model.servers.length; i++) {
             let server = model.servers[i];
-            let sessions = model.sessions.filter((session) => session.serverId === server.id);
+            // The quiet ones (a finish that has been read) are in the model so
+            // the dots can tell read from unread; they are not worth a row.
+            let sessions = model.sessions.filter((session) => session.serverId === server.id && isWorthListing(session));
             if (sessions.length === 0 && !server.error && !this.menuShowIdleServers) {
                 continue;
             }
@@ -704,22 +757,28 @@ class KiloAgentsApplet extends Applet.Applet {
         }
 
         if (model.servers.length === 0) {
-            this._serversSection.addMenuItem(new PopupMenu.PopupMenuItem("No kilo servers found", { reactive: false }));
+            this._serversSection.addMenuItem(new PopupMenu.PopupMenuItem("No opencode server found", { reactive: false }));
         }
     }
 
     _serverItem(server, sessions) {
+        let live = sessions.filter(function (session) { return session.blocked || session.status === "running"; }).length;
+        let finished = sessions.length - live;
         let title = server.id;
-        if (sessions.length > 0) {
-            title += "  \u2014  " + sessions.length + " active";
-        } else if (server.error) {
-            title += "  \u2014  unreachable";
-        } else {
-            title += "  \u2014  idle";
+        let parts = [];
+        if (live) {
+            parts.push(live + " active");
         }
+        if (finished) {
+            parts.push(finished + " finished");
+        }
+        if (parts.length === 0) {
+            parts.push(server.error ? "unreachable" : "idle");
+        }
+        title += "  \u2014  " + parts.join(", ");
         let item = new PopupMenu.PopupSubMenuMenuItem(title);
         if (server.pid) {
-            item.menu.addMenuItem(new PopupMenu.PopupMenuItem("pid " + server.pid + " \u00b7 " + server.directoryCount + " projects", { reactive: false }));
+            item.menu.addMenuItem(new PopupMenu.PopupMenuItem("pid " + server.pid + " \u00b7 " + server.projectCount + " projects", { reactive: false }));
         }
         if (server.error) {
             item.menu.addMenuItem(new PopupMenu.PopupMenuItem(Format.truncate(server.error, 70), { reactive: false }));
@@ -731,9 +790,9 @@ class KiloAgentsApplet extends Applet.Applet {
     }
 
     _sessionItem(session) {
-        let glyph = session.statusType === "question" ? "?" :
-            (session.statusType === "busy" ? "\u25b6" :
-             (session.statusType === "retry" ? "\u21bb" : "\u26a0"));
+        let state = this._states[session.id] || (session.blocked ? "blocked" : "working");
+        let glyph = state === "blocked" ? "\u25cf" :
+            (state === "done" ? "\u2713" : "\u25b6");
         let label = glyph + "  " + Format.sessionMenuLabel(session, {
             maxTitleLength: this.menuTitleLength,
             showAgent: true,
@@ -741,6 +800,9 @@ class KiloAgentsApplet extends Applet.Applet {
         });
         let item = new PopupMenu.PopupSubMenuMenuItem(label);
 
+        if (session.project) {
+            item.menu.addMenuItem(new PopupMenu.PopupMenuItem("project " + session.project, { reactive: false }));
+        }
         item.menu.addMenuItem(new PopupMenu.PopupMenuItem(Format.truncate(session.title, 80), { reactive: false }));
         if (this.menuShowDirectory && session.directory) {
             item.menu.addMenuItem(new PopupMenu.PopupMenuItem(session.directory, { reactive: false }));
@@ -789,6 +851,11 @@ class KiloAgentsApplet extends Applet.Applet {
             item.menu.addMenuItem(actionItem);
         }
 
+        item.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        let markItem = new PopupMenu.PopupIconMenuItem("Mark as seen", SEEN_ICON, St.IconType.SYMBOLIC);
+        markItem.connect("activate", () => this._acknowledge(session.id));
+        item.menu.addMenuItem(markItem);
+
         return item;
     }
 
@@ -804,6 +871,7 @@ class KiloAgentsApplet extends Applet.Applet {
     }
 
     _activateSession(session) {
+        this._acknowledge(session.id);
         if (this.clickAction === "copy") {
             this._copyToClipboard(session.id);
             return;
@@ -829,10 +897,11 @@ class KiloAgentsApplet extends Applet.Applet {
         let values = {
             id: session.id,
             title: session.title,
+            project: session.project || "",
             dir: session.directory || "",
             agent: session.agent || "",
             model: Format.modelLabel(session.model) || "",
-            status: session.statusType,
+            status: this._states[session.id] || (session.blocked ? "blocked" : "working"),
         };
         return String(template).replace(/\{(\w+)\}/g, (match, key) => (values[key] === undefined ? match : values[key]));
     }
@@ -854,9 +923,9 @@ class KiloAgentsApplet extends Applet.Applet {
             GLib.source_remove(this._animations[i]);
         }
         this._animations = [];
-        if (this._questionTimer) {
-            GLib.source_remove(this._questionTimer);
-            this._questionTimer = 0;
+        if (this._pulseTimer) {
+            GLib.source_remove(this._pulseTimer);
+            this._pulseTimer = 0;
         }
         if (this._monitor) {
             this._monitor.stop();
@@ -869,5 +938,5 @@ class KiloAgentsApplet extends Applet.Applet {
 }
 
 function main(metadata, orientation, panelHeight, instanceId) {
-    return new KiloAgentsApplet(metadata, orientation, panelHeight, instanceId);
+    return new OpencodeAgentsApplet(metadata, orientation, panelHeight, instanceId);
 }

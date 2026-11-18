@@ -1,25 +1,25 @@
-// Finding the kilo servers that are running on this machine.
+// Finding the opencode v2 servers that are running on this machine.
 //
-// Kilo's "who is working" state lives in the memory of the server process
-// that runs an agent, not in the shared database, so an applet has to talk to
-// every server process it can find. Three sources, cheapest first:
+// A v2 server is a single shared background service that multiplexes every
+// project, so unlike v1 (and unlike kilo) one server is normally enough. It
+// registers itself when it starts, and the applet reads that registration:
 //
-//   1. kilo daemon discovery file (~/.local/state/kilo/daemon.json)
+//   1. the service file - ~/.local/state/opencode/service.json, written by
+//      `opencode serve --service` with the url, pid and password
 //   2. servers the user listed in the applet settings
-//   3. a /proc scan - each `kilo serve` (including the VS Code extension's
-//      random-port ones) carries KILO_* variables in its environment; the
-//      port comes from --port, or from the process's listening sockets when
-//      it was started with `--port 0`.
+//   3. a /proc scan - every `opencode ... serve` process of this user, for a
+//      server started by hand on its own port and never registered
 
 const GLib = imports.gi.GLib;
 
 const Procfs = imports.lib.procfs;
 
 var DEFAULT_HOST = "127.0.0.1";
-var DEFAULT_USERNAME = "kilo";
+var DEFAULT_USERNAME = "opencode";
 
-// argv[0] of a shell is never a kilo server, even when its command line mentions
-// `serve --port N` (a terminal running that command looks otherwise identical).
+// argv[0] of a shell is never an opencode server, even when its command line
+// mentions `serve --port N` (a terminal running that command looks otherwise
+// identical).
 var SHELLS = ["sh", "bash", "dash", "zsh", "ksh", "fish", "csh", "tcsh", "busybox"];
 
 function isShell(argv) {
@@ -30,8 +30,18 @@ function isShell(argv) {
     return SHELLS.indexOf(program) >= 0;
 }
 
-function defaultDaemonFile() {
-    return GLib.build_filenamev([GLib.get_home_dir(), ".local", "state", "kilo", "daemon.json"]);
+// $XDG_STATE_HOME/opencode/service.json, defaulting to ~/.local/state.
+function defaultServiceFile() {
+    let base = null;
+    try {
+        base = GLib.get_user_state_dir();
+    } catch (e) {
+        base = null;
+    }
+    if (!base) {
+        base = GLib.build_filenamev([GLib.get_home_dir(), ".local", "state"]);
+    }
+    return GLib.build_filenamev([base, "opencode", "service.json"]);
 }
 
 function makeServer(fields) {
@@ -61,7 +71,7 @@ function label(server) {
 }
 
 function parseUrl(text) {
-    let match = /^(?:https?:\/\/)?([^\/:]+)(?::(\d+))?/.exec(text.trim());
+    let match = /^(?:https?:\/\/)?([^\/:]+)(?::(\d+))?/.exec(String(text).trim());
     if (!match) {
         return null;
     }
@@ -104,8 +114,10 @@ function parseExtraServers(text) {
     return servers;
 }
 
-function fromDaemonFile(path, options) {
-    let file = path || defaultDaemonFile();
+// The service file written by `opencode serve --service`:
+//   { id, version, url: "http://127.0.0.1:4097", pid, password }
+function fromServiceFile(path, options) {
+    let file = path || defaultServiceFile();
     let text = Procfs.readText(file);
     if (!text) {
         return [];
@@ -115,27 +127,21 @@ function fromDaemonFile(path, options) {
         data = JSON.parse(text);
     } catch (e) {
         if (options && options.log) {
-            options.log("kilo-agents: ignoring unreadable daemon file " + file + ": " + e.message);
+            options.log("opencode-agents: ignoring unreadable service file " + file + ": " + e.message);
         }
         return [];
     }
     let host = DEFAULT_HOST;
     let port = data.port;
-    if (data.urls && data.urls.local) {
-        let parsed = parseUrl(data.urls.local);
-        if (parsed) {
-            host = parsed.host || host;
-            port = port || parsed.port;
-        }
-    } else if (data.url) {
-        let parsed = parseUrl(data.url);
-        if (parsed) {
-            host = parsed.host || host;
-            port = port || parsed.port;
-        }
+    let parsed = parseUrl(data.url || data.urls && data.urls.local || "");
+    if (parsed) {
+        host = parsed.host || host;
+        port = port || parsed.port;
     }
-    if (data.hostname && (data.hostname === "localhost" || data.hostname === "127.0.0.1")) {
-        host = data.hostname === "localhost" ? DEFAULT_HOST : data.hostname;
+    if (data.hostname === "localhost") {
+        host = DEFAULT_HOST;
+    } else if (data.hostname) {
+        host = data.hostname;
     }
     let server = makeServer({
         host: host,
@@ -143,7 +149,7 @@ function fromDaemonFile(path, options) {
         username: data.username,
         password: data.password,
         pid: data.pid,
-        source: "daemon",
+        source: "service",
     });
     return server ? [server] : [];
 }
@@ -164,30 +170,33 @@ function hasToken(argv, token) {
     return argv.indexOf(token) >= 0;
 }
 
-// Test doubles started by tests/bin/kilo carry this marker so that running the
-// test suite cannot pollute a live panel.
-var MOCK_MARKER = "KILO_AGENTS_MOCK";
+// Test doubles started by tests/bin/opencode carry this marker so that running
+// the test suite cannot pollute a live panel.
+var MOCK_MARKER = "OPENCODE_AGENTS_MOCK";
 
 function isMock(env) {
     return !!(env && env[MOCK_MARKER]);
 }
 
-function looksLikeKiloEnv(env) {
+// An opencode process announces itself in its environment. `OPENCODE` alone is
+// not enough (every agent-spawned child carries it), so the caller also asks
+// for the `serve` subcommand on the command line.
+function looksLikeOpencodeEnv(env) {
     if (!env) {
         return false;
     }
-    if (env.KILO || env.KILO_MACHINE_ID) {
+    if (env.OPENCODE || env.OPENCODE_TERMINAL || env.AI_AGENT === "opencode") {
         return true;
     }
     for (let key in env) {
-        if (key.startsWith("KILO_SERVER") || key.startsWith("KILOCODE")) {
+        if (key.startsWith("OPENCODE_")) {
             return true;
         }
     }
     return false;
 }
 
-// Every `kilo serve` process owned by the current user.
+// Every `opencode ... serve` process owned by the current user.
 // options: { includeMocks } - the applet leaves that false, the test suite sets it.
 function fromProc(options) {
     let opts = options || {};
@@ -205,7 +214,7 @@ function fromProc(options) {
             continue;
         }
         let env = Procfs.environ(pid);
-        if (!looksLikeKiloEnv(env)) {
+        if (!looksLikeOpencodeEnv(env)) {
             continue;
         }
         if (!opts.includeMocks && isMock(env)) {
@@ -224,14 +233,14 @@ function fromProc(options) {
         let port = parseInt(flagValue(argv, "--port") || "", 10);
         if (isNaN(port) || port <= 0) {
             if (opts.log && listening.length === 0) {
-                opts.log("kilo-agents: pid " + pid + " speaks serve but listens on nothing (yet)");
+                opts.log("opencode-agents: pid " + pid + " speaks serve but listens on nothing (yet)");
             }
             for (let p = 0; p < listening.length; p++) {
                 let server = makeServer({
                     host: hosts.length ? hosts[0] : DEFAULT_HOST,
                     port: listening[p],
-                    username: env.KILO_SERVER_USERNAME,
-                    password: env.KILO_SERVER_PASSWORD,
+                    username: env.OPENCODE_SERVER_USERNAME,
+                    password: env.OPENCODE_SERVER_PASSWORD,
                     pid: pid,
                     cmdline: argv.join(" "),
                     cwd: Procfs.cwd(pid),
@@ -246,7 +255,7 @@ function fromProc(options) {
 
         if (listening.indexOf(port) < 0) {
             if (opts.log) {
-                opts.log("kilo-agents: pid " + pid + " claims --port " + port + " but does not listen on it");
+                opts.log("opencode-agents: pid " + pid + " claims --port " + port + " but does not listen on it");
             }
             continue;
         }
@@ -254,8 +263,8 @@ function fromProc(options) {
         let server = makeServer({
             host: hosts.length ? hosts[0] : DEFAULT_HOST,
             port: port,
-            username: env.KILO_SERVER_USERNAME,
-            password: env.KILO_SERVER_PASSWORD,
+            username: env.OPENCODE_SERVER_USERNAME,
+            password: env.OPENCODE_SERVER_PASSWORD,
             pid: pid,
             cmdline: argv.join(" "),
             cwd: Procfs.cwd(pid),
@@ -292,13 +301,13 @@ function merge(servers) {
     return order.map(function (id) { return byId[id]; });
 }
 
-// options: { daemonFile, useDaemon, useProc, extraServers, includeMocks, log }
+// options: { serviceFile, useService, useProc, extraServers, includeMocks, log }
 function discover(options) {
     let opts = options || {};
     let found = [];
 
-    if (opts.useDaemon !== false) {
-        found = found.concat(fromDaemonFile(opts.daemonFile, opts));
+    if (opts.useService !== false) {
+        found = found.concat(fromServiceFile(opts.serviceFile, opts));
     }
     found = found.concat(parseExtraServers(opts.extraServers));
     if (opts.useProc !== false) {

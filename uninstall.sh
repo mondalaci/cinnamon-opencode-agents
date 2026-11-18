@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Remove the Kilo Agents applet from Cinnamon: panel entry, config, files.
+# Remove the OpenCode Agents applet from Cinnamon: panel entry, config, files.
 
 set -euo pipefail
 
-UUID="kilo-agents@laci"
+UUID="opencode-agents@laci"
 DEST_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/cinnamon/applets"
 DEST="$DEST_ROOT/$UUID"
 # Cinnamon 6 keeps xlet settings under ~/.config/cinnamon/spices,
@@ -15,7 +15,7 @@ KEEP_FILES=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --keep-files) KEEP_FILES=1 ;;
-        -h|--help) sed -n '2,3p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,2p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
     shift

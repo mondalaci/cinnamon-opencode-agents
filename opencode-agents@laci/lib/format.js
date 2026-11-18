@@ -2,10 +2,9 @@
 // testable and safe to call from the applet's UI callbacks.
 
 var STATUS_LABELS = {
-    question: "awaiting your answer",
-    busy: "working",
-    retry: "retrying",
-    offline: "reconnecting",
+    blocked: "blocked",
+    working: "working",
+    done: "done",
     idle: "idle",
 };
 
@@ -33,6 +32,18 @@ function shortDirectory(path, segments) {
     return "\u2026/" + parts.slice(parts.length - count).join("/");
 }
 
+// The display name of a project directory: its last segment.
+function projectLabel(directory) {
+    if (!directory) {
+        return "";
+    }
+    if (directory === "/") {
+        return "root";
+    }
+    let parts = String(directory).split("/").filter(function (part) { return part.length > 0; });
+    return parts.length ? parts[parts.length - 1] : directory;
+}
+
 function modelLabel(model) {
     if (!model) {
         return null;
@@ -45,34 +56,33 @@ function modelLabel(model) {
     return slash >= 0 ? id.slice(slash + 1) : id;
 }
 
-function statusText(statusType) {
-    return STATUS_LABELS[statusType] || statusType || "unknown";
+function statusText(state) {
+    return STATUS_LABELS[state] || state || "unknown";
 }
 
+// The one-line reason a session shows: what it waits for, or what it is doing.
 function statusDetail(session) {
     if (!session) {
         return "";
     }
-    if (session.statusType === "question") {
-        return session.question ? "awaiting your answer: " + truncate(session.question, 60) : "awaiting your answer";
-    }
-    if (session.statusType === "retry") {
-        let parts = ["retrying"];
-        if (session.attempt) {
-            parts.push("attempt " + session.attempt);
+    if (session.blocked) {
+        if (session.blockedReason && session.blockedReason !== "question") {
+            let detail = session.blockedDetail ? ": " + truncate(session.blockedDetail, 60) : "";
+            return "waiting for approval" + detail;
         }
-        if (session.nextAt) {
-            parts.push("in " + Math.round(session.nextAt / 100) / 10 + "s");
-        }
-        if (session.message) {
-            parts.push(truncate(session.message, 60));
-        }
-        return parts.join(" · ");
+        let question = session.blockedDetail ? ": " + truncate(session.blockedDetail, 60) : "";
+        return "waiting for an answer" + question;
     }
-    if (session.statusType === "offline") {
-        return session.message ? "reconnecting: " + truncate(session.message, 60) : "reconnecting";
+    if (session.status === "running" || session.status === "busy") {
+        return "working";
     }
-    return statusText(session.statusType);
+    if (session.status === "retry") {
+        return "retrying";
+    }
+    if (session.done) {
+        return "done";
+    }
+    return statusText(session.status);
 }
 
 function elapsed(ms) {
@@ -126,7 +136,7 @@ function tokenCount(session) {
 
 function serverSummary(model) {
     if (!model || model.servers.length === 0) {
-        return "no kilo servers found";
+        return "no opencode server found";
     }
     let reachable = model.servers.filter(function (server) { return server.ok; }).length;
     let text = model.servers.length + (model.servers.length === 1 ? " server" : " servers");
@@ -152,7 +162,7 @@ function sessionMenuLabel(session, options) {
     if (bits.length === 0) {
         return title;
     }
-    return title + "  (" + bits.join(" · ") + ")";
+    return title + "  (" + bits.join(" \u00b7 ") + ")";
 }
 
 // Multi-line summary shown as the panel tooltip.
@@ -160,37 +170,39 @@ function tooltipText(model, options) {
     let opts = options || {};
     let lines = [];
     if (!model || model.active === 0) {
-        lines.push("Kilo Agents - no active sessions");
+        lines.push("OpenCode Agents - no agent is working");
     } else {
         let counts = [];
-        if (model.question) {
-            counts.push(model.question + " awaiting your answer");
+        if (model.blocked) {
+            counts.push(model.blocked + " blocked");
         }
-        if (model.busy) {
-            counts.push(model.busy + " working");
+        if (model.working) {
+            counts.push(model.working + " working");
         }
-        if (model.retry) {
-            counts.push(model.retry + " retrying");
+        if (model.done) {
+            counts.push(model.done + " finished");
         }
-        if (model.offline) {
-            counts.push(model.offline + " reconnecting");
-        }
-        lines.push("Kilo Agents - " + model.active + " active (" + counts.join(", ") + ")");
+        lines.push("OpenCode Agents - " + model.active + " active (" + counts.join(", ") + ")");
     }
     lines.push(serverSummary(model));
 
     if (model) {
         let limit = opts.maxLines || 6;
-        for (let i = 0; i < model.sessions.length && i < limit; i++) {
-            let session = model.sessions[i];
-            let parts = [truncate(session.title, 40), statusDetail(session)];
-            if (opts.showDirectory !== false && session.directory) {
-                parts.push(shortDirectory(session.directory));
+        let rows = model.sessions.filter(function (session) {
+            return session.blocked || session.done || session.status === "running";
+        });
+        for (let i = 0; i < rows.length && i < limit; i++) {
+            let session = rows[i];
+            let parts = [];
+            if (session.project) {
+                parts.push(session.project);
             }
+            parts.push(truncate(session.title, 40));
+            parts.push(statusDetail(session));
             lines.push("\u2022 " + parts.join(" - "));
         }
-        if (model.sessions.length > limit) {
-            lines.push("\u2026 " + (model.sessions.length - limit) + " more");
+        if (rows.length > limit) {
+            lines.push("\u2026 " + (rows.length - limit) + " more");
         }
         if (model.errors.length) {
             lines.push("errors: " + model.errors.join("; "));

@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# Install the Kilo Agents applet into Cinnamon.
+# Install the OpenCode Agents applet into Cinnamon.
 #
 #   ./install.sh                 symlink into ~/.local/share/cinnamon/applets
 #                                and add it to the panel
 #   ./install.sh --copy          copy instead of symlinking (for a fixed install)
 #   ./install.sh --no-enable     install only, do not touch the panel layout
 #   ./install.sh --panel-right N place it at panel1:right:N
+#
+# A panel entry left behind by the older kilo-agents@laci applet is dropped, so
+# an upgrade does not leave a dead applet on the panel.
 
 set -euo pipefail
 
-UUID="kilo-agents@laci"
+UUID="opencode-agents@laci"
+LEGACY_UUID="kilo-agents@laci"
 SRC_DIR=$(cd "$(dirname "$0")" && pwd)/$UUID
 DEST_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/cinnamon/applets"
 DEST="$DEST_ROOT/$UUID"
@@ -23,7 +27,7 @@ while [ $# -gt 0 ]; do
         --symlink) MODE=symlink ;;
         --no-enable) ENABLE=0 ;;
         --panel-right) PANEL_POSITION="$2"; shift ;;
-        -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
     shift
@@ -50,18 +54,19 @@ else
 fi
 
 if [ "$ENABLE" = "1" ]; then
-    python3 - "$UUID" "$PANEL_POSITION" <<'PY'
+    python3 - "$UUID" "$LEGACY_UUID" "$PANEL_POSITION" <<'PY'
 import ast
 import subprocess
 import sys
 
-uuid, position = sys.argv[1], sys.argv[2]
+uuid, legacy_uuid, position = sys.argv[1], sys.argv[2], sys.argv[3]
 schema = "org.cinnamon"
 key = "enabled-applets"
 
 raw = subprocess.run(["gsettings", "get", schema, key],
                      capture_output=True, text=True, check=True).stdout
-entries = [entry for entry in ast.literal_eval(raw) if uuid not in entry]
+entries = [entry for entry in ast.literal_eval(raw)
+           if uuid not in entry and legacy_uuid not in entry]
 
 instance_ids = []
 positions = set()

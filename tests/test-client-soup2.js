@@ -6,11 +6,11 @@ imports.gi.versions.Soup = "2.4";
 
 const GLib = imports.gi.GLib;
 
-const ROOT = GLib.getenv("KILO_TEST_ROOT");
-imports.searchPath.unshift(GLib.build_filenamev([ROOT, "kilo-agents@laci"]));
+const ROOT = GLib.getenv("OPENCODE_TEST_ROOT");
+imports.searchPath.unshift(GLib.build_filenamev([ROOT, "opencode-agents@laci"]));
 
 const Client = imports.lib.client;
-const KiloClient = imports.lib.client.KiloClient;
+const OpencodeClient = imports.lib.client.OpencodeClient;
 
 let failures = 0;
 let checks = 0;
@@ -34,8 +34,12 @@ function env(name) {
 }
 
 function readFile(path) {
-    let [ok, contents] = GLib.file_get_contents(path);
-    return ok ? new TextDecoder().decode(contents) : null;
+    try {
+        let [ok, contents] = GLib.file_get_contents(path);
+        return ok ? new TextDecoder().decode(contents) : null;
+    } catch (e) {
+        return null;
+    }
 }
 
 async function run() {
@@ -43,21 +47,25 @@ async function run() {
     equal("soup2: libsoup 2.x is in use", Client.LIBSOUP_MAJOR, 2);
     equal("soup2: send_and_read_async absent", Client.HAS_SEND_AND_READ, false);
 
-    let fixedPort = parseInt(env("KILO_TEST_FIXED_PORT"), 10);
-    let dynamicPort = parseInt(readFile(env("KILO_TEST_DYNAMIC_PORT_FILE")), 10);
+    let fixedPort = parseInt(env("OPENCODE_TEST_FIXED_PORT"), 10);
+    let dynamicPort = parseInt(readFile(env("OPENCODE_TEST_DYNAMIC_PORT_FILE")), 10);
 
-    let open = new KiloClient({ host: "127.0.0.1", port: fixedPort });
+    let open = new OpencodeClient({ host: "127.0.0.1", port: fixedPort });
+    equal("soup2: /api/info works", (await open.info()).version, "9.9.9-test");
+
     let projects = await open.projects();
-    equal("soup2: /project works", projects.length, 2);
+    check("soup2: /api/project works", projects.length >= 2, JSON.stringify(projects.length));
 
-    let statuses = await open.sessionStatuses(env("KILO_TEST_PROJ_A"));
-    equal("soup2: /session/status works", statuses["ses_busy_a"] && statuses["ses_busy_a"].type, "busy");
+    let active = await open.activeSessions();
+    equal("soup2: /api/session/active works", active["ses_busy_a"] && active["ses_busy_a"].type, "running");
 
-    let sessions = await open.sessions(env("KILO_TEST_PROJ_A"), 5);
-    equal("soup2: /api/session works", sessions.length >= 1, true);
-    equal("soup2: session title", sessions[0].title, "Fix the widget");
+    let session = await open.session("ses_busy_a");
+    equal("soup2: /api/session/<id> works", session && session.title, "Fix the widget");
 
-    let anonymous = new KiloClient({ host: "127.0.0.1", port: dynamicPort });
+    let list = await open.sessions({ limit: 5, directory: env("OPENCODE_TEST_PROJ_A") });
+    equal("soup2: /api/session works", list.length >= 1, true);
+
+    let anonymous = new OpencodeClient({ host: "127.0.0.1", port: dynamicPort });
     let unauthorized = null;
     try {
         await anonymous.projects();
@@ -67,13 +75,21 @@ async function run() {
     check("soup2: 401 without credentials", unauthorized !== null && unauthorized.status === 401,
         unauthorized ? String(unauthorized.status) : "no error");
 
-    let authenticated = new KiloClient({ host: "127.0.0.1", port: dynamicPort, username: "kilo", password: "test-secret-123" });
-    equal("soup2: authenticated request works", (await authenticated.projects()).length, 2);
+    let authenticated = new OpencodeClient({ host: "127.0.0.1", port: dynamicPort, password: "test-secret-123" });
+    equal("soup2: authenticated request works", (await authenticated.projects()).length >= 2, true);
 
-    let pending = await authenticated.questions(env("KILO_TEST_PROJ_B"));
-    equal("soup2: /question works", pending.length, 2);
-    check("soup2: a pending question names its session",
-        pending.some(function (request) { return request.sessionID === "ses_question_f"; }), JSON.stringify(pending));
+    let permissions = await authenticated.permissions(env("OPENCODE_TEST_PROJ_B"));
+    check("soup2: /api/permission/request works", permissions.length === 1, JSON.stringify(permissions));
+    equal("soup2: a permission names its session", permissions[0] && permissions[0].sessionID, "ses_blocked_b");
+
+    let forms = await authenticated.forms(env("OPENCODE_TEST_PROJ_B"));
+    check("soup2: /api/form works", forms.length === 2, JSON.stringify(forms.length));
+
+    // The one write the applet makes, so the POST body path is exercised on
+    // libsoup 2.4 as well.
+    equal("soup2: viewSession works", await authenticated.viewSession("ses_question_c", 7000), null);
+    let marked = await authenticated.session("ses_question_c");
+    equal("soup2: the view is recorded", marked.time.viewed, 7000);
 
     print("");
     print(checks + " checks, " + failures + " failures");

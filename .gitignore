@@ -1,6 +1,3 @@
-# Kilo's own agent-manager state for this workspace
-.kilo/
-
 # Python bytecode from the test suite
 __pycache__/
 *.pyc

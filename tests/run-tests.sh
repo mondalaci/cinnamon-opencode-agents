@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Test suite for the kilo-agents Cinnamon applet.
+# Test suite for the opencode-agents Cinnamon applet.
 #
-# Starts a handful of mock kilo servers (one password-less, one that requires
-# auth on an OS-assigned port, one behind a daemon discovery file) and runs the
-# gjs test harnesses against them, with libsoup 3 and with libsoup 2.4.
+# Starts a handful of mock opencode v2 servers (one password-less, one that
+# requires auth on an OS-assigned port, one announced by a service file) and
+# runs the gjs test harnesses against them, with libsoup 3 and with libsoup 2.4.
 
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-WORK=$(mktemp -d /tmp/kilo-agents-tests.XXXXXX)
+WORK=$(mktemp -d /tmp/opencode-agents-tests.XXXXXX)
 PIDS=()
 
 cleanup() {
@@ -35,104 +35,103 @@ PY
 }
 
 FIXED_PORT=$(free_port)
-DAEMON_PORT=$(free_port)
+SERVICE_PORT=$(free_port)
 DEAD_PORT=$(free_port)
 
 mkdir -p "$WORK/proj-a" "$WORK/proj-b"
 STATE="$WORK/state.json"
 STATE_B="$WORK/state-b.json"
-DAEMON_STATE="$WORK/state-daemon.json"
+STATE_D="$WORK/state-service.json"
+SERVICE_FILE="$WORK/service.json"
 
 # Each mock owns its own sessions, so a session's server attribution is
 # deterministic. ses_shared_x appears on two servers on purpose: the monitor
-# has to merge it into one row.
+# has to merge it into one row, and the blocked report has to win.
 cat > "$STATE" <<JSON
 {
   "projects": [
-    {"id": "proj-a", "worktree": "$WORK/proj-a", "vcs": "git", "time": {"created": 1, "updated": 200}, "sandboxes": []},
-    {"id": "proj-b", "worktree": "$WORK/proj-b", "vcs": "git", "time": {"created": 1, "updated": 100}, "sandboxes": []}
+    {"id": "proj-a", "canonical": "$WORK/proj-a", "name": "Proj A", "time": {"created": 1, "updated": 200, "active": 200}},
+    {"id": "proj-b", "canonical": "$WORK/proj-b", "time": {"created": 1, "updated": 100, "active": 100}}
   ],
   "sessions": [
-    {"id": "ses_busy_a", "directory": "$WORK/proj-a", "status": {"type": "busy"}, "title": "Fix the widget", "agent": "code"},
-    {"id": "ses_idle_e", "directory": "$WORK/proj-a", "status": {"type": "idle"}, "title": "Finished already", "agent": "code"},
-    {"id": "ses_shared_x", "directory": "$WORK/proj-a", "status": {"type": "busy"}, "title": "Seen by two servers", "agent": "code"}
-  ]
+    {"id": "ses_busy_a", "directory": "$WORK/proj-a", "status": "running", "title": "Fix the widget", "agent": "build", "updated": 5000},
+    {"id": "ses_idle_e", "directory": "$WORK/proj-a", "status": "idle", "title": "Finished already", "agent": "build", "updated": 4000},
+    {"id": "ses_shared_x", "directory": "$WORK/proj-a", "status": "running", "title": "Seen by two servers", "agent": "build", "updated": 3000}
+  ],
+  "locations": ["$WORK/proj-a"]
 }
 JSON
 
 cat > "$STATE_B" <<JSON
 {
   "projects": [
-    {"id": "proj-a", "worktree": "$WORK/proj-a", "vcs": "git", "time": {"created": 1, "updated": 200}, "sandboxes": []},
-    {"id": "proj-b", "worktree": "$WORK/proj-b", "vcs": "git", "time": {"created": 1, "updated": 100}, "sandboxes": []}
+    {"id": "proj-a", "canonical": "$WORK/proj-a", "name": "Proj A", "time": {"created": 1, "updated": 200, "active": 200}},
+    {"id": "proj-b", "canonical": "$WORK/proj-b", "time": {"created": 1, "updated": 100, "active": 100}},
+    {"id": "proj-c", "canonical": "$WORK/proj-c", "name": "Proj C", "time": {"created": 1, "updated": 90, "active": 90}},
+    {"id": "proj-d", "canonical": "$WORK/proj-d", "name": "Proj D", "time": {"created": 1, "updated": 80, "active": 80}}
   ],
   "sessions": [
-    {"id": "ses_retry_b", "directory": "$WORK/proj-b", "status": {"type": "retry", "attempt": 2, "message": "rate limited", "next": 2000}, "title": "Retry the upload", "agent": "code"},
-    {"id": "ses_offline_c", "directory": "$WORK/proj-b", "status": {"type": "offline", "requestID": "que_1", "message": "which file?"}, "title": "Waiting for input", "agent": "ask"},
-    {"id": "ses_question_f", "directory": "$WORK/proj-b", "status": {"type": "busy"}, "title": "Pick a colour", "agent": "ask"},
-    {"id": "ses_question_g", "directory": "$WORK/proj-b", "status": {"type": "idle"}, "title": "Ask then idle", "agent": "ask"},
-    {"id": "ses_shared_x", "directory": "$WORK/proj-a", "status": {"type": "busy"}, "title": "Seen by two servers", "agent": "code"}
+    {"id": "ses_blocked_b", "directory": "$WORK/proj-b", "status": "running", "title": "Approve the upload", "agent": "build", "updated": 8000},
+    {"id": "ses_question_c", "directory": "$WORK/proj-b", "status": "running", "title": "Pick a colour", "agent": "ask", "updated": 7000},
+    {"id": "ses_idle_question_d", "directory": "$WORK/proj-b", "status": "idle", "title": "Ask then idle", "agent": "ask", "updated": 6000},
+    {"id": "ses_shared_x", "directory": "$WORK/proj-a", "status": "running", "title": "Seen by two servers", "agent": "build", "updated": 3000},
+    {"id": "ses_finished_h", "directory": "$WORK/proj-c", "status": "idle", "title": "Finished on its own", "agent": "build", "updated": 50,
+     "time": {"created": 1, "updated": 50, "idle": 1}},
+    {"id": "ses_viewed_i", "directory": "$WORK/proj-d", "status": "idle", "title": "Already looked at", "agent": "build", "updated": 60,
+     "time": {"created": 1, "updated": 60, "idle": 1, "viewed": 2}}
   ],
-  "questions": [
-    {"id": "que_f", "sessionID": "ses_question_f", "header": "Which colour?", "question": "Red or blue?"},
-    {"id": "que_g", "sessionID": "ses_question_g", "header": "Still there?", "question": "Should I continue?"},
-    {"id": "que_x", "sessionID": "ses_shared_x", "header": "Shared ask", "question": "Which side wins?"}
+  "locations": ["$WORK/proj-a", "$WORK/proj-b"],
+  "permissions": [
+    {"id": "per_b", "sessionID": "ses_blocked_b", "action": "bash", "resources": ["git push"], "message": "may I push?", "directory": "$WORK/proj-b"}
+  ],
+  "forms": [
+    {"id": "frm_c", "sessionID": "ses_question_c", "title": "Which colour?", "fields": [], "directory": "$WORK/proj-b"},
+    {"id": "frm_d", "sessionID": "ses_idle_question_d", "title": "Still there?", "fields": [], "directory": "$WORK/proj-b"},
+    {"id": "frm_x", "sessionID": "ses_shared_x", "title": "Shared ask", "fields": [], "directory": "$WORK/proj-a"}
   ]
 }
 JSON
 
-cat > "$DAEMON_STATE" <<JSON
+cat > "$STATE_D" <<JSON
 {
   "projects": [
-    {"id": "proj-a", "worktree": "$WORK/proj-a", "vcs": "git", "time": {"created": 1, "updated": 200}, "sandboxes": []}
+    {"id": "proj-a", "canonical": "$WORK/proj-a", "name": "Proj A", "time": {"created": 1, "updated": 200, "active": 200}}
   ],
   "sessions": [
-    {"id": "ses_daemon_d", "directory": "$WORK/proj-a", "status": {"type": "busy"}, "title": "Daemon session", "agent": "code"}
-  ]
+    {"id": "ses_service_d", "directory": "$WORK/proj-a", "status": "running", "title": "Service session", "agent": "build", "updated": 9000}
+  ],
+  "locations": ["$WORK/proj-a"]
 }
 JSON
 
-cat > "$WORK/daemon.json" <<JSON
-{
-  "pid": 4242,
-  "hostname": "127.0.0.1",
-  "port": $DAEMON_PORT,
-  "urls": {"local": "http://127.0.0.1:$DAEMON_PORT", "network": "", "bind": "127.0.0.1"},
-  "username": "kilo",
-  "password": "daemon-secret",
-  "version": "9.9.9-test",
-  "startedAt": 1792396000000
-}
-JSON
-
-export MOCK_SERVER="$ROOT/tests/mock-kilo-server.py"
-KILO_BIN="$ROOT/tests/bin/kilo"
-chmod +x "$KILO_BIN"
+export MOCK_SERVER="$ROOT/tests/mock-opencode-server.py"
+OPENCODE_BIN="$ROOT/tests/bin/opencode"
+chmod +x "$OPENCODE_BIN"
 
 # 1. plain server on a fixed port
-"$KILO_BIN" serve --port "$FIXED_PORT" --hostname 127.0.0.1 --state "$STATE" --parent-pid $$ >"$WORK/mock-a.log" 2>&1 &
+"$OPENCODE_BIN" serve --port "$FIXED_PORT" --hostname 127.0.0.1 --state "$STATE" --parent-pid $$ >"$WORK/mock-a.log" 2>&1 &
 PIDS+=($!)
 
 # 2. server started with --port 0 that requires auth
-MOCK_PASSWORD=test-secret-123 "$KILO_BIN" serve --port 0 --hostname 127.0.0.1 --parent-pid $$ \
+MOCK_PASSWORD=test-secret-123 "$OPENCODE_BIN" serve --port 0 --hostname 127.0.0.1 --parent-pid $$ \
     --state "$STATE_B" --require-auth --port-file "$WORK/port-b" >"$WORK/mock-b.log" 2>&1 &
 PIDS+=($!)
 
-# 3. the daemon server named by the discovery file (own state, own password)
-MOCK_PASSWORD=daemon-secret "$KILO_BIN" serve --port "$DAEMON_PORT" --hostname 127.0.0.1 --parent-pid $$ \
-    --state "$DAEMON_STATE" --require-auth >"$WORK/mock-d.log" 2>&1 &
+# 3. the service-file server (own state, own password, writes its registration)
+MOCK_PASSWORD=service-secret "$OPENCODE_BIN" serve --port "$SERVICE_PORT" --hostname 127.0.0.1 --parent-pid $$ \
+    --state "$STATE_D" --require-auth --service-file "$SERVICE_FILE" >"$WORK/mock-d.log" 2>&1 &
 PIDS+=($!)
 
-# 4. a shell whose command line merely mentions a kilo server: it must never be
-#    mistaken for one (a terminal running `kilo serve --port N` looks the same)
+# 4. a shell whose command line merely mentions a server: it must never be
+#    mistaken for one (a terminal running `opencode serve` looks the same)
 FAKE_SHELL_PORT=$(free_port)
-env KILO=1 KILO_MACHINE_ID=test bash -c "exec -a 'kilo serve --port $FAKE_SHELL_PORT' sleep 60" >"$WORK/fake-shell.log" 2>&1 &
+env OPENCODE=1 bash -c "exec -a bash sleep 60 serve --port $FAKE_SHELL_PORT" >"$WORK/fake-shell.log" 2>&1 &
 PIDS+=($!)
-export KILO_TEST_FAKE_SHELL_PORT="$FAKE_SHELL_PORT"
+export OPENCODE_TEST_FAKE_SHELL_PORT="$FAKE_SHELL_PORT"
 
 # wait for both dynamic and fixed ports to answer
 for _ in $(seq 1 100); do
-    if [ -f "$WORK/port-b" ] && curl -s -o /dev/null "http://127.0.0.1:$FIXED_PORT/project"; then
+    if [ -f "$WORK/port-b" ] && curl -s -o /dev/null "http://127.0.0.1:$FIXED_PORT/api/info"; then
         break
     fi
     sleep 0.1
@@ -143,16 +142,16 @@ if [ ! -f "$WORK/port-b" ]; then
     exit 1
 fi
 
-export KILO_TEST_ROOT="$ROOT"
-export KILO_TEST_WORK="$WORK"
-export KILO_TEST_STATE="$STATE"
-export KILO_TEST_STATE_B="$STATE_B"
-export KILO_TEST_PROJ_A="$WORK/proj-a"
-export KILO_TEST_PROJ_B="$WORK/proj-b"
-export KILO_TEST_FIXED_PORT="$FIXED_PORT"
-export KILO_TEST_DAEMON_PORT="$DAEMON_PORT"
-export KILO_TEST_DEAD_PORT="$DEAD_PORT"
-export KILO_TEST_DYNAMIC_PORT_FILE="$WORK/port-b"
+export OPENCODE_TEST_ROOT="$ROOT"
+export OPENCODE_TEST_WORK="$WORK"
+export OPENCODE_TEST_STATE="$STATE"
+export OPENCODE_TEST_PROJ_A="$WORK/proj-a"
+export OPENCODE_TEST_PROJ_B="$WORK/proj-b"
+export OPENCODE_TEST_FIXED_PORT="$FIXED_PORT"
+export OPENCODE_TEST_SERVICE_PORT="$SERVICE_PORT"
+export OPENCODE_TEST_SERVICE_FILE="$SERVICE_FILE"
+export OPENCODE_TEST_DEAD_PORT="$DEAD_PORT"
+export OPENCODE_TEST_DYNAMIC_PORT_FILE="$WORK/port-b"
 
 echo "=== lib tests (libsoup 3) ==="
 gjs "$ROOT/tests/test-lib.js"
