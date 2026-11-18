@@ -373,6 +373,11 @@ function testLookAndFeel() {
     // it, so the tile must left-align its own two lines.
     check("look: the tile text is left aligned",
         !!css && /\.opencode-agents-tile-text\s*\{[^}]*text-align:\s*left/.test(css), "");
+    // The two lines are one block: the project is only quieter, not smaller.
+    let projectSize = css && (css.match(/\.opencode-agents-tile-project\s*\{[^}]*font-size:\s*([^;]+);/) || [])[1];
+    let subjectSize = css && (css.match(/\.opencode-agents-tile-subject\s*\{[^}]*font-size:\s*([^;]+);/) || [])[1];
+    check("look: the project and subject share a font size",
+        !!projectSize && projectSize.trim() === (subjectSize || "").trim(), projectSize + " vs " + subjectSize);
     // The padding must live on the tile, not on any come-and-go class, or the
     // row would shuffle on every poll.
     check("look: the tile owns its padding",

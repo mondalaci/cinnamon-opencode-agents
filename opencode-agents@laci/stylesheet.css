@@ -25,9 +25,10 @@
     text-align: left;
 }
 
-/* The project line is quieter than the conversation subject. */
+/* The project line is quieter than the conversation subject, but the same
+   size: the two lines read as one block. */
 .opencode-agents-tile-project {
-    font-size: 0.72em;
+    font-size: 0.95em;
     opacity: 0.75;
 }
 
