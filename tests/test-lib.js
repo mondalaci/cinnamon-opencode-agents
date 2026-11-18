@@ -274,6 +274,19 @@ function testTiles() {
     equal("tiles: entry lookup by id", Tiles.entryFor("ses_b", [a, b]).title, "Second");
     equal("tiles: entry lookup for a marker", Tiles.entryFor(Tiles.OVERFLOW, [a, b]), null);
     equal("tiles: entry lookup for something gone", Tiles.entryFor("ses_z", [a, b]), null);
+
+    // width fitting: every tile keeps its natural width while there is room
+    equal("widths: room to spare", Tiles.fitWidths([40, 60], 200).join(","), "40,60");
+    equal("widths: exactly enough", Tiles.fitWidths([40, 60], 100).join(","), "40,60");
+    // too little: the modest tile keeps its size, the greedy one takes the rest
+    equal("widths: slack goes to the greedy tile", Tiles.fitWidths([40, 60], 80).join(","), "40,40");
+    equal("widths: a cheap tile does not shrink the others", Tiles.fitWidths([10, 90], 60).join(","), "10,50");
+    // nothing fits: an equal cut
+    equal("widths: equal cut when nothing fits", Tiles.fitWidths([40, 60], 50).join(","), "25,25");
+    equal("widths: many equal desires", Tiles.fitWidths([10, 10, 10], 15).join(","), "5,5,5");
+    equal("widths: no tiles", Tiles.fitWidths([], 100).length, 0);
+    equal("widths: zero budget", Tiles.fitWidths([40, 60], 0).join(","), "0,0");
+    equal("widths: never negative", Tiles.fitWidths([40], -10).join(","), "0");
 }
 
 // ----------------------------------------------------------------- easing
@@ -356,6 +369,10 @@ function testLookAndFeel() {
     check("look: the stylesheet defines the dot", !!css && css.indexOf(".opencode-agents-dot") >= 0, "");
     check("look: the stylesheet defines the project line", !!css && css.indexOf(".opencode-agents-tile-project") >= 0, "");
     check("look: the stylesheet defines the subject line", !!css && css.indexOf(".opencode-agents-tile-subject") >= 0, "");
+    // The panel theme centres text; a label wider than its line would centre
+    // it, so the tile must left-align its own two lines.
+    check("look: the tile text is left aligned",
+        !!css && /\.opencode-agents-tile-text\s*\{[^}]*text-align:\s*left/.test(css), "");
     // The padding must live on the tile, not on any come-and-go class, or the
     // row would shuffle on every poll.
     check("look: the tile owns its padding",
@@ -392,8 +409,9 @@ function testSettingsSchema() {
     equal("settings: every bound key is in the schema", missing.join(","), "");
 
     check("settings: the dot size is offered", schema["dot-size"] && schema["dot-size"].type === "spinbutton", "");
-    check("settings: the project and subject lengths are offered",
-        !!schema["tile-project-length"] && !!schema["tile-subject-length"], "");
+    check("settings: there is no text-length cap any more",
+        schema["tile-project-length"] === undefined && schema["tile-subject-length"] === undefined,
+        Object.keys(schema).filter(function (key) { return key.indexOf("tile-") === 0; }).join(","));
     check("settings: the pulse is documented", schema["animate-tiles"].tooltip.indexOf("pulse") >= 0, schema["animate-tiles"].tooltip);
     check("settings: the service file is offered", !!schema["use-service"] && !!schema["service-file"], "");
 }
@@ -804,6 +822,55 @@ async function testMonitorViewedMarker() {
         rejected ? String(rejected.status) : "no error");
 }
 
+// A conversation is given its title a moment after it starts, so a record that
+// arrived without one has to be re-read on the next poll instead of being
+// trusted for the whole metadata TTL - otherwise the tile keeps showing the
+// session id long after the server has named the conversation.
+async function testMonitorRefreshesTitle() {
+    let fixedPort = env("OPENCODE_TEST_FIXED_PORT");
+    let stateFile = env("OPENCODE_TEST_STATE");
+    let original = readFile(stateFile);
+
+    let state = JSON.parse(original);
+    byId(state.sessions, "ses_busy_a").title = "";
+    writeFile(stateFile, JSON.stringify(state));
+
+    let monitor = new Monitor(monitorOptions({
+        intervalSeconds: 1,
+        metadataTtlSeconds: 30,
+        discoverOptions: { useService: false, useProc: false, extraServers: "127.0.0.1:" + fixedPort },
+    }));
+    let models = [];
+    monitor.onUpdate = function (model) { models.push(model); };
+    monitor.start();
+
+    check("monitor: the unnamed sweep arrives", await until(function () { return models.length >= 1; }, 20000), "no model");
+    let unnamed = models.length ? byId(models[0].sessions, "ses_busy_a") : null;
+    equal("monitor: an unnamed conversation falls back to its id", unnamed && unnamed.title, "ses_busy_a");
+
+    // the server names it, well inside the 30 s metadata TTL
+    state = JSON.parse(original);
+    byId(state.sessions, "ses_busy_a").title = "Fix the widget";
+    writeFile(stateFile, JSON.stringify(state));
+
+    let named = null;
+    await until(function () {
+        for (let i = models.length - 1; i >= 0; i--) {
+            let session = byId(models[i].sessions, "ses_busy_a");
+            if (session && session.title === "Fix the widget") {
+                named = session;
+                return true;
+            }
+        }
+        return false;
+    }, 6000);
+    monitor.stop();
+    check("monitor: the title is re-read without waiting out the TTL", !!named,
+        named ? named.title : "still " + (unnamed && unnamed.title));
+
+    writeFile(stateFile, original);
+}
+
 async function testMonitorExtraServersAndErrors() {
     let deadPort = parseInt(env("OPENCODE_TEST_DEAD_PORT"), 10);
     let fixedPort = env("OPENCODE_TEST_FIXED_PORT");
@@ -924,6 +991,7 @@ async function run() {
     await testMonitorWithProcDiscovery();
     await testMonitorSessions();
     await testMonitorViewedMarker();
+    await testMonitorRefreshesTitle();
     await testMonitorExtraServersAndErrors();
     await testMonitorReactsToStateChanges();
     await testMonitorStop();

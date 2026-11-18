@@ -20,6 +20,9 @@
 
 .opencode-agents-tile-text {
     spacing: 0px;
+    /* The panel theme centres text; the two lines must start at the same left
+       edge, since a wider label would otherwise centre a shorter line. */
+    text-align: left;
 }
 
 /* The project line is quieter than the conversation subject. */

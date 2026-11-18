@@ -46,6 +46,68 @@ function isMarker(id) {
     return id === IDLE || id === OVERFLOW;
 }
 
+// Spreads a horizontal budget over the widths a row of tiles would like to
+// have. Every tile gets at most its desire, and the slack a short tile leaves
+// is handed to the greedy ones, so a row of brief projects does not starve the
+// one long conversation that could use the room. Only when the budget cannot
+// cover every desire does a tile fall short of it - which is exactly where its
+// text starts to ellipsize. Pure, so the test suite covers it directly.
+function fitWidths(desires, budget) {
+    let list = desires || [];
+    let count = list.length;
+    let widths = new Array(count);
+    if (count === 0) {
+        return widths;
+    }
+
+    let wants = [];
+    let total = 0;
+    for (let i = 0; i < count; i++) {
+        let want = Math.max(0, list[i] || 0);
+        wants.push(want);
+        total += want;
+    }
+
+    let room = Math.max(0, budget);
+    if (room >= total) {
+        for (let i = 0; i < count; i++) {
+            widths[i] = wants[i];
+        }
+        return widths;
+    }
+
+    // Water-filling: whoever fits under the current equal share takes their
+    // desire and steps out; the rest split what is left, which lifts the share
+    // for the ones still in. Repeat until the remaining wants are all larger
+    // than the share they get.
+    let undecided = [];
+    for (let i = 0; i < count; i++) {
+        undecided.push(i);
+    }
+    let remaining = room;
+    while (undecided.length > 0) {
+        let share = remaining / undecided.length;
+        let settled = [];
+        let rest = [];
+        for (let k = 0; k < undecided.length; k++) {
+            let i = undecided[k];
+            (wants[i] <= share ? settled : rest).push(i);
+        }
+        if (settled.length === 0) {
+            for (let k = 0; k < rest.length; k++) {
+                widths[rest[k]] = share;
+            }
+            break;
+        }
+        for (let k = 0; k < settled.length; k++) {
+            widths[settled[k]] = wants[settled[k]];
+            remaining -= wants[settled[k]];
+        }
+        undecided = rest;
+    }
+    return widths;
+}
+
 // What the tile for an id should look like - used to notice that a kept tile
 // needs its texts or dot refreshed.
 function entryFor(id, entries) {

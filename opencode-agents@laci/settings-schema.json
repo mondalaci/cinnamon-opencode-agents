@@ -63,8 +63,6 @@
             "title": "Agent tiles",
             "keys": [
                 "dot-size",
-                "tile-project-length",
-                "tile-subject-length",
                 "tile-show-project",
                 "tile-show-subject",
                 "tiles-max",
@@ -247,24 +245,6 @@
         "units": "pixels",
         "description": "Status dot size",
         "tooltip": "Diameter of the state dot at the head of every tile."
-    },
-    "tile-project-length": {
-        "type": "spinbutton",
-        "default": 24,
-        "min": 4,
-        "max": 60,
-        "step": 2,
-        "units": "characters",
-        "description": "Project name length"
-    },
-    "tile-subject-length": {
-        "type": "spinbutton",
-        "default": 28,
-        "min": 4,
-        "max": 80,
-        "step": 2,
-        "units": "characters",
-        "description": "Conversation subject length"
     },
     "tile-show-project": {
         "type": "switch",

@@ -21,6 +21,7 @@ const Applet = imports.ui.applet;
 const Clutter = imports.gi.Clutter;
 const Gio = imports.gi.Gio;
 const GLib = imports.gi.GLib;
+const Pango = imports.gi.Pango;
 const PopupMenu = imports.ui.popupMenu;
 const Settings = imports.ui.settings;
 const St = imports.gi.St;
@@ -50,6 +51,9 @@ const OUT_ANIMATION_MS = 200;
 const FRAME_MS = 16;
 const PULSE_FRAME_MS = 40;
 const IDLE_ICON_SIZE = 20;
+// Device pixels kept free beside the other panel applets, so a full row never
+// reaches the point where the panel starts squeezing every box to its minimum.
+const PANEL_MARGIN = 8;
 
 // What the panel is about: a session waiting for a human, one that is running,
 // or a finish nobody has read yet. The monitor also reports the conversations
@@ -114,6 +118,9 @@ class OpencodeAgentsApplet extends Applet.Applet {
         this._known = {};         // session id -> last known session info
         this._acknowledged = {};  // session id -> true, once the user has seen it
         this._pulseTimer = 0;
+        this._resizeQueued = false;
+        this._resizeIdle = 0;
+        this._panelSignals = [];  // [actor, handler id] for the panel resize watch
 
         this._tilesBox = new St.BoxLayout({
             style_class: "opencode-agents-tiles",
@@ -129,6 +136,55 @@ class OpencodeAgentsApplet extends Applet.Applet {
 
         this._log("loading " + UUID + " (libsoup " + imports.lib.client.LIBSOUP_MAJOR + ".x)");
         this._startMonitor();
+    }
+
+    // The panel hands the applet only as much room as its contents ask for, so
+    // the row claims the space the other applets leave. That room changes while
+    // the applet runs (a window list grows, a panel is resized), hence the
+    // watch on both the panel and the box that holds us.
+    on_applet_added_to_panel() {
+        this._watchWidth(this.panel && this.panel.actor);
+        this._watchWidth(this._panelLocation);
+        this._queueResize();
+    }
+
+    on_applet_removed_from_panel() {
+        if (this._resizeIdle) {
+            GLib.source_remove(this._resizeIdle);
+            this._resizeIdle = 0;
+            this._resizeQueued = false;
+        }
+        for (let i = 0; i < this._panelSignals.length; i++) {
+            let entry = this._panelSignals[i];
+            try {
+                entry.actor.disconnect(entry.id);
+            } catch (e) {
+                // the actor is being torn down with us
+            }
+        }
+        this._panelSignals = [];
+    }
+
+    _watchWidth(actor) {
+        if (!actor) {
+            return;
+        }
+        let id = actor.connect("notify::width", () => this._queueResize());
+        this._panelSignals.push({ actor: actor, id: id });
+    }
+
+    // Coalesces the resize watches into one re-measure per idle turn.
+    _queueResize() {
+        if (this._resizeQueued) {
+            return;
+        }
+        this._resizeQueued = true;
+        this._resizeIdle = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._resizeIdle = 0;
+            this._resizeQueued = false;
+            this._resizeTiles(this._tileIds);
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _log(message) {
@@ -153,8 +209,6 @@ class OpencodeAgentsApplet extends Applet.Applet {
         this.settings.bind("extra-servers", "extraServers", this._onMonitorSettingsChanged);
 
         this.settings.bind("tiles-max", "tilesMax", this._onAppearanceChanged);
-        this.settings.bind("tile-project-length", "tileProjectLength", this._onAppearanceChanged);
-        this.settings.bind("tile-subject-length", "tileSubjectLength", this._onAppearanceChanged);
         this.settings.bind("tile-show-project", "tileShowProject", this._onAppearanceChanged);
         this.settings.bind("tile-show-subject", "tileShowSubject", this._onAppearanceChanged);
         this.settings.bind("dot-size", "dotSize", this._onAppearanceChanged);
@@ -266,7 +320,7 @@ class OpencodeAgentsApplet extends Applet.Applet {
     // are only moved and refreshed.
     _renderTiles(model) {
         let entries = this._entries();
-        let appearance = [this.tilesMax, this.tileProjectLength, this.tileSubjectLength, this.tileShowProject,
+        let appearance = [this.tilesMax, this.tileShowProject,
                           this.tileShowSubject, this.dotSize, this.hideWhenIdle].join("|");
 
         if (appearance !== this._tilesAppearance) {
@@ -297,9 +351,125 @@ class OpencodeAgentsApplet extends Applet.Applet {
             this._tilesBox.set_child_at_index(actor, index);
         }
         this._tileIds = plan.order.slice();
+        this._resizeTiles(plan.order);
         this._tilesRendered = true;
         this._tilesBox.visible = !(entries.length === 0 && this.hideWhenIdle);
         this._syncPulse();
+    }
+
+    // Fits the tile row into the room the panel leaves beside the other
+    // applets. A tile is as wide as its project and subject need - there is no
+    // length cap - and only when the row as a whole runs out of room do the
+    // tiles shrink and their text ellipsize. When there is no panel to measure
+    // (the library tests, the first render before the applet is added) every
+    // line keeps its natural width, so nothing is ever cut short for lack of a
+    // measurement.
+    _resizeTiles(order) {
+        let ids = order || this._tileIds || [];
+        let tiles = [];
+        for (let i = 0; i < ids.length; i++) {
+            let tile = this._tiles[ids[i]];
+            if (tile) {
+                tiles.push(tile);
+            }
+        }
+        if (tiles.length === 0) {
+            return;
+        }
+
+        // Measure at the natural width: a width forced on a line last time
+        // would otherwise be what we read back as its need.
+        for (let i = 0; i < tiles.length; i++) {
+            this._setLineWidth(tiles[i]._ocProject, -1);
+            this._setLineWidth(tiles[i]._ocSubject, -1);
+        }
+
+        let budget = this._availableRowWidth();
+        if (budget <= 0) {
+            return;
+        }
+
+        let gaps = this._tileSpacing() * Math.max(0, tiles.length - 1);
+        let room = Math.max(0, budget - PANEL_MARGIN - this._actorPadding() - gaps);
+
+        // The dot-only and marker tiles keep their natural size; only the tiles
+        // that actually carry text take part in the split. What a tile spends
+        // on its dot, padding and spacing is not up for sharing, so it comes
+        // off the budget before the text is fitted.
+        let flexible = [];
+        let desires = [];
+        let minimums = [];
+        let chrome = 0;
+        let fixed = 0;
+        for (let i = 0; i < tiles.length; i++) {
+            let tile = tiles[i];
+            if (this._tileHasText(tile)) {
+                let text = tile._ocText;
+                let natural = text.get_preferred_width(-1)[1];
+                let overhead = Math.max(0, tile.get_preferred_width(-1)[1] - natural);
+                flexible.push(tile);
+                desires.push(natural);
+                minimums.push(text.get_preferred_width(-1)[0]);
+                chrome += overhead;
+            } else {
+                fixed += tile.get_preferred_width(-1)[1];
+            }
+        }
+
+        let widths = Tiles.fitWidths(desires, Math.max(0, room - chrome - fixed));
+        for (let i = 0; i < flexible.length; i++) {
+            // Never below the tile's own minimum: a squeezed line should
+            // ellipsize, not collapse to nothing.
+            let width = Math.max(minimums[i], Math.round(widths[i]));
+            this._setLineWidth(flexible[i]._ocProject, width);
+            this._setLineWidth(flexible[i]._ocSubject, width);
+        }
+    }
+
+    _setLineWidth(label, width) {
+        if (label) {
+            label.set_width(width);
+        }
+    }
+
+    _tileHasText(tile) {
+        return !!(tile._ocText && tile._ocText.visible && tile._ocText.get_children().length > 0);
+    }
+
+    // The horizontal room the applet may take: what is left of the panel once
+    // the other two boxes, the other applets in our own box, and the box's own
+    // spacing are accounted for. -1 when there is no panel to measure (the
+    // library tests, the first render before the applet is added).
+    _availableRowWidth() {
+        let panel = this.panel;
+        let box = this._panelLocation;
+        if (!panel || !panel.actor || !box) {
+            return -1;
+        }
+        let total = panel.actor.get_width();
+        if (!total || total <= 0) {
+            return -1;
+        }
+        let boxes = [panel._leftBox, panel._centerBox, panel._rightBox];
+        let others = 0;
+        for (let i = 0; i < boxes.length; i++) {
+            if (boxes[i] && boxes[i] !== box) {
+                others += boxes[i].get_preferred_width(-1)[1];
+            }
+        }
+        // `mine - ours` is everything in our box that is not us: the applets
+        // that share it and the spacing around them. It cancels out of the
+        // measurement, so the answer does not depend on how wide we are.
+        let mine = box.get_preferred_width(-1)[1];
+        let ours = this.actor.get_preferred_width(-1)[1];
+        return total - others - Math.max(0, mine - ours);
+    }
+
+    // The applet's own padding, so the row can be given the inside of it.
+    _actorPadding() {
+        let actor = this.actor.get_preferred_width(-1)[1];
+        let box = this._tilesBox.get_preferred_width(-1)[1];
+        return Math.max(0, actor - box);
     }
 
     _dropTiles() {
@@ -400,9 +570,11 @@ class OpencodeAgentsApplet extends Applet.Applet {
         }
         let wantsProject = this.tileShowProject && session && session.project;
         let wantsSubject = this.tileShowSubject && session && session.title;
-        this._syncLabel(actor, "_ocProject", text, wantsProject ? Format.truncate(session.project, this.tileProjectLength) : null,
+        // No length cap: the tile takes the room it needs and the row ellipsizes
+        // only when the panel has none left to give.
+        this._syncLabel(actor, "_ocProject", text, wantsProject ? session.project : null,
             "opencode-agents-tile-project", 0);
-        this._syncLabel(actor, "_ocSubject", text, wantsSubject ? Format.truncate(session.title, this.tileSubjectLength) : null,
+        this._syncLabel(actor, "_ocSubject", text, wantsSubject ? session.title : null,
             "opencode-agents-tile-subject", 1);
         text.visible = !!(wantsProject || wantsSubject);
     }
@@ -422,6 +594,10 @@ class OpencodeAgentsApplet extends Applet.Applet {
         if (!label) {
             label = new St.Label({ text: wanted, style_class: styleClass });
             label.set_x_align(Clutter.ActorAlign.START);
+            // The row decides how wide the tile is, so a line longer than the
+            // room it was given is truncated here rather than overflowing into
+            // the next tile.
+            label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
             tile[slot] = label;
             text.insert_child_at_index(label, Math.min(index, text.get_children().length));
         } else if (label.get_text() !== wanted) {

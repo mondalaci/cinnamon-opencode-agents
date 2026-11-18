@@ -93,6 +93,10 @@ var Monitor = class Monitor {
         this._servers = [];
         this._projectCache = {};
         this._sessionCache = {};
+        // A session's title is filled in by the server shortly after it starts,
+        // so a record that arrived without one is re-read on the next poll
+        // rather than trusted for the whole metadata TTL.
+        this._titlelessTtlMs = Math.max(1000, this.intervalMs);
         this._model = emptyModel();
     }
 
@@ -212,11 +216,17 @@ var Monitor = class Monitor {
 
     // Session info for an id, refreshed when it is stale. One id at a time:
     // the panel only ever asks about the handful of sessions that are live.
+    // A record without a title is already stale: the server names a
+    // conversation a moment after it starts, so the title would otherwise be
+    // pinned to the session id for the whole metadata TTL.
     async _session(client, server, id) {
         let key = server.id + "|" + id;
         let cached = this._sessionCache[key];
-        if (cached && now() - cached.at < this.metadataTtlMs) {
-            return cached.info;
+        if (cached) {
+            let ttl = cached.info && cached.info.title ? this.metadataTtlMs : this._titlelessTtlMs;
+            if (now() - cached.at < ttl) {
+                return cached.info;
+            }
         }
         let info = null;
         try {
