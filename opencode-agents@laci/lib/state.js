@@ -10,7 +10,9 @@
 //
 // Precedence is blocked > working > done > idle, and the colours are the
 // studio's dark-theme ones (--git-deleted / --git-modified / --git-added and
-// its neutral grey), which is what the panel's own dark tone wants.
+// its neutral grey), which is what the panel's own dark tone wants. A blocked
+// tile is filled with that red and a `done` one with the green, so both stand
+// out instead of only carrying a dot.
 //
 // Pure: no Cinnamon, no I/O, so the test suite covers it directly.
 
@@ -30,12 +32,32 @@ var LABELS = {
     idle: "idle",
 };
 
+// The ink a filled tile writes in. The panel's own text is light on the dark
+// theme, which would vanish on a solid status colour, so a filled tile turns
+// dark the way it has to.
+var INK = "#0d1117";
+
 function color(state) {
     return COLORS[state] || COLORS.idle;
 }
 
 function label(state) {
     return LABELS[state] || "idle";
+}
+
+function ink() {
+    return INK;
+}
+
+// Only the states that need a human fill their whole tile with the state's
+// colour: a block, because the agent cannot go on without an answer (a
+// permission request, or a question with its choices), and an unread finish,
+// because the answer arrived while the user was looking elsewhere. Both have to
+// be visible from across the room. Work and idle keep the panel background -
+// the dot says all there is to say about them, and a row of filled working
+// tiles would be a wall of colour that shouts about nothing new.
+function fills(state) {
+    return state === "blocked" || state === "done";
 }
 
 // Rank for sorting: the most actionable first.

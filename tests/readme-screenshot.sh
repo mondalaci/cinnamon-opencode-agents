@@ -46,12 +46,20 @@ cat > "$WORK/state.json" <<JSON
     {"id": "ses_shot_1", "directory": "$EXAMPLE_DIR", "status": "running", "title": "Refactor the payment adapter", "agent": "build", "updated": 4102444800000},
     {"id": "ses_shot_2", "directory": "$EXAMPLE_DIR", "status": "running", "title": "Approve the deploy", "agent": "build", "updated": 4102444799000},
     {"id": "ses_shot_3", "directory": "$EXAMPLE_DIR", "status": "running", "title": "Fix the widget tests", "agent": "build", "updated": 4102444798000},
+    {"id": "ses_shot_5", "directory": "$EXAMPLE_DIR", "status": "running", "title": "Ship the release", "agent": "build", "updated": 4102444797000},
     {"id": "ses_shot_4", "directory": "$LEGACY_DIR", "status": "idle", "title": "Review the pull request", "agent": "build", "updated": $IDLE_MS,
      "time": {"created": 4102444700000, "updated": $IDLE_MS, "idle": $IDLE_MS}}
   ],
   "locations": ["$EXAMPLE_DIR", "$LEGACY_DIR"],
   "permissions": [
     {"id": "per_shot", "sessionID": "ses_shot_2", "action": "bash", "resources": ["deploy.sh"], "message": "may I deploy?", "directory": "$EXAMPLE_DIR"}
+  ],
+  "forms": [
+    {"id": "frm_shot", "sessionID": "ses_shot_5", "directory": "$EXAMPLE_DIR", "title": "Which channel?",
+     "fields": [
+       {"key": "channel", "type": "string", "label": "Channel", "options": ["stable", "beta", "nightly"]},
+       {"key": "announce", "type": "boolean", "label": "Announce it"}
+     ]}
   ]
 }
 JSON
@@ -158,7 +166,7 @@ shot_eval() {
     # anything that is not one of the mock's sessions is a leftover from the
     # real server - drop it, whatever state it is in (a session that was working
     # a moment ago turns green as the applet switches servers)
-    eval_applet 'const keep = {ses_shot_1: 1, ses_shot_2: 1, ses_shot_3: 1, ses_shot_4: 1}; Object.keys(ap._states).forEach(function (id) { if (!keep[id]) { ap._acknowledged[id] = true; ap._states[id] = "idle"; delete ap._known[id]; } }); ap._renderTiles(ap._model);'
+    eval_applet 'const keep = {ses_shot_1: 1, ses_shot_2: 1, ses_shot_3: 1, ses_shot_4: 1, ses_shot_5: 1}; Object.keys(ap._states).forEach(function (id) { if (!keep[id]) { ap._acknowledged[id] = true; ap._states[id] = "idle"; delete ap._known[id]; } }); ap._renderTiles(ap._model);'
     eval_applet 'const p = ap.actor.get_transformed_position(); const s = ap.actor.get_transformed_size(); const still = ap._tilesBox.get_children().every(function (a) { return a.opacity === 255 && a.translation_x === 0; }); imports.gi.GLib.file_set_contents("/tmp/opencode-agents-shot-geo.json", JSON.stringify({geo: [Math.round(p[0]), Math.round(p[1]), Math.round(s[0]), Math.round(s[1])], settled: still, tiles: ap._tileIds.length, titles: ap._model.sessions.map(function (m) { return m.title; }), states: ap._states, acks: Object.keys(ap._acknowledged)}))'
 }
 
@@ -167,13 +175,14 @@ shot_ready() {
     python3 - <<'PY'
 import json
 expected = {"Refactor the payment adapter", "Approve the deploy",
-            "Fix the widget tests", "Review the pull request"}
+            "Fix the widget tests", "Ship the release", "Review the pull request"}
 try:
     state = json.load(open('/tmp/opencode-agents-shot-geo.json'))
 except (OSError, ValueError):
     raise SystemExit(1)
-# exactly the example sessions: one blocked, two working, one finished, no overflow
-raise SystemExit(0 if state["settled"] and state["tiles"] == 4 and set(state["titles"]) == expected else 1)
+# exactly the example sessions: two blocked (a permission and a question with
+# its choices), two working, one finished, no overflow
+raise SystemExit(0 if state["settled"] and state["tiles"] == 5 and set(state["titles"]) == expected else 1)
 PY
 }
 

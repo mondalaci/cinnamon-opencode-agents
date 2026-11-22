@@ -18,6 +18,14 @@
     border-radius: 50%;
 }
 
+/* A blocked tile (red) and an unread finish (green) fill with the state colour.
+   The applet sets the fill colour and the dark text inline (both follow the
+   state); this class only rounds the fill into a pill, so the highlight reads
+   as one block instead of a rectangle eating into its neighbours. */
+.opencode-agents-tile-filled {
+    border-radius: 5px;
+}
+
 .opencode-agents-tile-text {
     spacing: 0px;
     /* The panel theme centres text; the two lines must start at the same left

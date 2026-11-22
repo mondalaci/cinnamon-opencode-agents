@@ -10,8 +10,9 @@
 // The top line is the project, the bottom line the conversation's subject. The
 // dot carries the state, with the vocabulary and colours of the opencode
 // project studio: red blocked (an agent waits for you), amber working, green
-// finished but not yet acknowledged, grey nothing to do. A working dot pulses;
-// clicking a finished tile acknowledges it and the tile slides away.
+// finished but not yet acknowledged, grey nothing to do. A working dot pulses,
+// a tile that waits for a human burns red and one whose answer nobody has read
+// turns green, and clicking such a tile acknowledges it, so it slides away.
 //
 // The menu has the details (project, agent, model, status, cost) and the
 // per-session actions. See lib/state.js for the dots and lib/monitor.js for the
@@ -46,6 +47,7 @@ const SETTINGS_ICON = "preferences-system-symbolic";
 const SEEN_ICON = "object-select-symbolic";
 const OVERFLOW_STYLE = "opencode-agents-tile-overflow";
 const DOT_STYLE = "opencode-agents-dot";
+const FILLED_STYLE = "opencode-agents-tile-filled";
 const IN_ANIMATION_MS = 250;
 const OUT_ANIMATION_MS = 200;
 const FRAME_MS = 16;
@@ -577,6 +579,7 @@ class OpencodeAgentsApplet extends Applet.Applet {
         this._syncLabel(actor, "_ocSubject", text, wantsSubject ? session.title : null,
             "opencode-agents-tile-subject", 1);
         text.visible = !!(wantsProject || wantsSubject);
+        this._paintTile(actor, state);
     }
 
     // Adds, updates or drops one of a tile's two lines, so a setting change or
@@ -610,8 +613,36 @@ class OpencodeAgentsApplet extends Applet.Applet {
         if (!dot) {
             return;
         }
-        dot.set_style("background-color: " + State.color(state) + "; border-radius: " + (this.dotSize / 2) + "px;");
+        // On a filled tile the dot is the same colour as the fill, so it turns
+        // into the fill's ink instead and stays a visible bullet.
+        let colour = State.fills(state) ? State.ink() : State.color(state);
+        dot.set_style("background-color: " + colour + "; border-radius: " + (this.dotSize / 2) + "px;");
         dot.opacity = 255;
+    }
+
+    // A tile that waits for a human (red) or whose answer nobody has read yet
+    // (green) fills with the state's colour; the stylesheet class rounds the
+    // fill into a pill and the two text lines turn dark, because the panel's own
+    // text is light and would vanish on it. Every other state clears all of
+    // that, so a tile that starts working, is acknowledged or drops to idle goes
+    // back to the panel background.
+    _paintTile(tile, state) {
+        let filled = State.fills(state);
+        tile.set_style(filled ? "background-color: " + State.color(state) + ";" : "");
+        if (filled) {
+            tile.add_style_class_name(FILLED_STYLE);
+        } else {
+            tile.remove_style_class_name(FILLED_STYLE);
+        }
+        let text = tile._ocText;
+        if (!text) {
+            return;
+        }
+        let ink = filled ? "color: " + State.ink() + ";" : "";
+        let lines = text.get_children();
+        for (let i = 0; i < lines.length; i++) {
+            lines[i].set_style(ink);
+        }
     }
 
     // ---- the working pulse ---------------------------------------------

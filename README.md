@@ -26,6 +26,13 @@ below.
   | 🟢 green | `done` | the turn finished and nobody has looked at it yet |
   | ⚪ grey | `idle` | nothing to do (only the idle icon uses it) |
 
+- **A tile that needs a human fills with its colour** - a conversation waiting
+  for you (a permission request, or a question offering its choices) is painted
+  red across the whole tile, and one whose turn finished and that nobody has
+  looked at yet is painted green, so both are visible from across the room. The
+  amber working tiles keep the panel background: they say all there is to say
+  with their pulsing dot.
+
 - **Project and subject** - the top line is the project the conversation lives
   in (its registered name, else the folder name), the bottom line the
   conversation's subject. A tile widens into the free panel space to show them

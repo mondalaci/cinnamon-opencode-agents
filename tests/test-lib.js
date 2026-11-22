@@ -165,10 +165,24 @@ function testState() {
     equal("state: idle colour", State.color("idle"), "#9b9b9b");
     equal("state: unknown colour falls back to idle", State.color("nonsense"), "#9b9b9b");
     equal("state: labels", State.label("done"), "done");
+    // A tile that needs a human fills (red for a block, green for an unread
+    // finish); work and idle keep the panel background.
+    check("state: an unread finish fills its tile", State.fills("done") === true, "");
+    check("state: a block fills its tile", State.fills("blocked") === true, "");
+    check("state: work and idle keep the panel background",
+        !State.fills("working") && !State.fills("idle"), "");
+    check("state: the ink is dark", /^#[0-9a-f]{6}$/.test(State.ink()) &&
+        parseInt(State.ink().slice(1, 3), 16) < 0x40, State.ink());
 
     let running = [{ id: "a", status: "running" }];
     equal("state: a running session works", State.resolve({}, running, {}).a, "working");
     equal("state: a blocked session", State.resolve({}, [{ id: "a", status: "running", blocked: true }], {}).a, "blocked");
+    // Both ways a human gets asked - a permission request and a question
+    // offering its choices - reach the same red, filled tile.
+    equal("state: a permission block is red",
+        State.fills(State.resolve({}, [{ id: "a", blocked: true, blockedReason: "permission: bash" }], {}).a), true);
+    equal("state: a question with choices is red",
+        State.fills(State.resolve({}, [{ id: "a", blocked: true, blockedReason: "question" }], {}).a), true);
     equal("state: an offline session waits like a blocked one",
         State.resolve({}, [{ id: "a", status: "offline" }], {}).a, "blocked");
     equal("state: a conversation the monitor marked finished is done",
@@ -385,6 +399,9 @@ function testLookAndFeel() {
 
     let applet = readFile(APPLET_DIR + "/applet.js");
     check("look: the applet paints the dot from the state", !!applet && applet.indexOf("State.color") >= 0, "");
+    check("look: an unread finish fills the whole tile",
+        !!applet && applet.indexOf("_paintTile") >= 0 && applet.indexOf("State.fills") >= 0 &&
+        !!css && css.indexOf(".opencode-agents-tile-filled") >= 0, "");
     check("look: the applet pulses the working dot", !!applet && applet.indexOf("pulseOpacity") >= 0 && applet.indexOf("_syncPulse") >= 0, "");
     check("look: the applet keeps two lines per tile", !!applet && applet.indexOf("opencode-agents-tile-project") >= 0 &&
         applet.indexOf("opencode-agents-tile-subject") >= 0, "");
