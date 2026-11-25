@@ -12,6 +12,18 @@
     padding: 1px 5px;
 }
 
+/* A session tile is a bin: the fill layer behind, the row's content on top. The
+   padding belongs to the content, so the fill covers the whole pill, corners
+   included - padding on the tile would leave a rim of panel around it. */
+.opencode-agents-tile-session {
+    padding: 0px;
+}
+
+.opencode-agents-tile-content {
+    spacing: 6px;
+    padding: 1px 5px;
+}
+
 /* The dot is sized and coloured from the applet (lib/state.js), because the
    colour follows the session's state and the size is a setting. */
 .opencode-agents-dot {
@@ -20,9 +32,10 @@
 
 /* A blocked tile (red) and an unread finish (green) fill with the state colour.
    The applet sets the fill colour and the dark text inline (both follow the
-   state); this class only rounds the fill into a pill, so the highlight reads
-   as one block instead of a rectangle eating into its neighbours. */
-.opencode-agents-tile-filled {
+   state); this layer sits behind the text so the cooldown can retract it while
+   the text stays put. It rounds the fill into a pill, so the highlight reads as
+   one block instead of a rectangle eating into its neighbours. */
+.opencode-agents-tile-fill {
     border-radius: 5px;
 }
 

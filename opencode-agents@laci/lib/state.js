@@ -174,3 +174,55 @@ function worst(states) {
     }
     return best;
 }
+
+// A colour part of the way from one to another, for the fill cooldown: a tile's
+// ink turns back into the panel's text colour while its fill retracts, so the
+// two never sit at odds. Both are "#rrggbb" (or "#rgb"), and so is the result.
+// Pure, so the test suite covers it directly.
+function mix(from, to, p) {
+    let a = parseHex(from);
+    let b = parseHex(to);
+    if (!a || !b) {
+        return p >= 0.5 ? to : from;
+    }
+    let t = p <= 0 ? 0 : (p >= 1 ? 1 : p);
+    return "#" + hexChannel(a[0] + (b[0] - a[0]) * t) +
+        hexChannel(a[1] + (b[1] - a[1]) * t) +
+        hexChannel(a[2] + (b[2] - a[2]) * t);
+}
+
+// "#rrggbb" or "#rgb" -> [r, g, b], or null when the string is not a colour.
+function parseHex(value) {
+    if (typeof value !== "string") {
+        return null;
+    }
+    let text = value.trim();
+    if (text.charAt(0) === "#") {
+        text = text.slice(1);
+    }
+    if (text.length === 3) {
+        text = text.charAt(0) + text.charAt(0) + text.charAt(1) + text.charAt(1) +
+            text.charAt(2) + text.charAt(2);
+    }
+    if (text.length !== 6 || !/^[0-9a-fA-F]{6}$/.test(text)) {
+        return null;
+    }
+    return [
+        parseInt(text.slice(0, 2), 16),
+        parseInt(text.slice(2, 4), 16),
+        parseInt(text.slice(4, 6), 16),
+    ];
+}
+
+// One 0..255 channel as two hex digits.
+function hexChannel(value) {
+    let n = Math.round(value);
+    if (n < 0) {
+        n = 0;
+    }
+    if (n > 255) {
+        n = 255;
+    }
+    let text = n.toString(16);
+    return text.length < 2 ? "0" + text : text;
+}

@@ -47,9 +47,12 @@ const SETTINGS_ICON = "preferences-system-symbolic";
 const SEEN_ICON = "object-select-symbolic";
 const OVERFLOW_STYLE = "opencode-agents-tile-overflow";
 const DOT_STYLE = "opencode-agents-dot";
-const FILLED_STYLE = "opencode-agents-tile-filled";
+const FILL_STYLE = "opencode-agents-tile-fill";
 const IN_ANIMATION_MS = 250;
 const OUT_ANIMATION_MS = 200;
+// How long a fill takes to retract once its tile stops waiting for a human.
+// Kept in step with the studio's sidebar, which sweeps the same 6 s.
+const COOL_MS = 6000;
 const FRAME_MS = 16;
 const PULSE_FRAME_MS = 40;
 const IDLE_ICON_SIZE = 20;
@@ -74,6 +77,20 @@ function iconSizeFor(pixels) {
         scale = 1;
     }
     return Math.max(1, Math.round(pixels / scale));
+}
+
+// One 0..255 colour channel as two hex digits, for building a "#rrggbb" string
+// from a Clutter colour.
+function hexChannel(value) {
+    let n = Math.round(value);
+    if (n < 0) {
+        n = 0;
+    }
+    if (n > 255) {
+        n = 255;
+    }
+    let text = n.toString(16);
+    return text.length < 2 ? "0" + text : text;
 }
 
 // The idle icon, rendered as a scalable icon so it stays smooth at any size.
@@ -119,6 +136,7 @@ class OpencodeAgentsApplet extends Applet.Applet {
         this._states = {};        // session id -> dot state (blocked/working/done/idle)
         this._known = {};         // session id -> last known session info
         this._acknowledged = {};  // session id -> true, once the user has seen it
+        this._cooling = {};       // session id -> true, while its fill retracts
         this._pulseTimer = 0;
         this._resizeQueued = false;
         this._resizeIdle = 0;
@@ -314,14 +332,28 @@ class OpencodeAgentsApplet extends Applet.Applet {
 
     _entries() {
         let sessions = this._model ? this._model.sessions : [];
-        return State.display(this._states, sessions);
+        let entries = State.display(this._states, sessions);
+        if (!this.animateTiles) {
+            return entries;
+        }
+        // A tile whose fill is ending stays in the row while the colour retracts,
+        // so the read-status transition reads like the studio's sidebar: the fill
+        // sweeps away in place instead of the whole tile leaving at once. See
+        // Tiles.hold; _endCooling drops the tile when the sweep finishes.
+        let filled = {};
+        for (let id in this._tiles) {
+            let tile = this._tiles[id];
+            if (tile && (tile._ocFilled || this._cooling[id])) {
+                filled[id] = true;
+            }
+        }
+        return Tiles.hold(this._tileIds, entries, filled, this._cooling);
     }
 
     // The tile row is diffed against the previous poll and animated: a session
     // that starts slides in, one that leaves slides out, and tiles that stay
     // are only moved and refreshed.
     _renderTiles(model) {
-        let entries = this._entries();
         let appearance = [this.tilesMax, this.tileShowProject,
                           this.tileShowSubject, this.dotSize, this.hideWhenIdle].join("|");
 
@@ -330,6 +362,10 @@ class OpencodeAgentsApplet extends Applet.Applet {
             this._tilesAppearance = appearance;
             this._dropTiles();
         }
+
+        // Read after the rebuild: a dropped row has no fill to hold, and a held
+        // tile would only be re-created as a plain idle one.
+        let entries = this._entries();
 
         let plan = Tiles.plan(this._tileIds, entries, this.tilesMax);
         // the first render is not a transition: nothing to animate yet
@@ -477,10 +513,12 @@ class OpencodeAgentsApplet extends Applet.Applet {
     _dropTiles() {
         this._stopPulse();
         for (let id in this._tiles) {
+            this._stopCooling(this._tiles[id]);
             this._tiles[id].destroy();
         }
         this._tiles = {};
         this._tileIds = [];
+        this._cooling = {};
     }
 
     _createTile(id, entry, overflow) {
@@ -501,19 +539,50 @@ class OpencodeAgentsApplet extends Applet.Applet {
     }
 
     // One agent: a status dot, and the project over the conversation subject.
+    //
+    // The tile is a bin, not a row: the fill layer sits behind the row's content.
+    // The fill has to be its own actor, because the cooldown retracts it while
+    // the text stays readable on the uncovered side - a clip on the tile itself
+    // would sweep the text away with the colour.
     _sessionTile(id, entry) {
-        let tile = new St.BoxLayout({
-            style_class: "opencode-agents-tile",
+        let tile = new St.Widget({
+            style_class: "opencode-agents-tile opencode-agents-tile-session",
             reactive: true,
         });
+        tile.set_layout_manager(new Clutter.BinLayout());
         tile.set_y_align(Clutter.ActorAlign.CENTER);
         tile.set_x_align(Clutter.ActorAlign.CENTER);
+
+        let fill = new St.Widget({
+            style_class: FILL_STYLE,
+            reactive: false,
+        });
+        fill.set_x_align(Clutter.ActorAlign.FILL);
+        fill.set_y_align(Clutter.ActorAlign.FILL);
+        // A bin layout only honours FILL for a child that asks to expand;
+        // without these the layer would be centred at its own (zero) size.
+        fill.set_x_expand(true);
+        fill.set_y_expand(true);
+        fill.visible = false;
+        tile.add_child(fill);
+        tile._ocFill = fill;
+
+        let row = new St.BoxLayout({
+            style_class: "opencode-agents-tile-content",
+            reactive: false,
+        });
+        row.set_x_align(Clutter.ActorAlign.FILL);
+        row.set_y_align(Clutter.ActorAlign.FILL);
+        row.set_x_expand(true);
+        row.set_y_expand(true);
+        tile.add_child(row);
+        tile._ocRow = row;
 
         let dot = new St.Widget({ style_class: DOT_STYLE });
         dot.set_size(this.dotSize, this.dotSize);
         dot.set_x_align(Clutter.ActorAlign.CENTER);
         dot.set_y_align(Clutter.ActorAlign.CENTER);
-        tile.add_child(dot);
+        row.add_child(dot);
         tile._ocDot = dot;
 
         let text = new St.BoxLayout({
@@ -523,11 +592,14 @@ class OpencodeAgentsApplet extends Applet.Applet {
         });
         text.set_y_align(Clutter.ActorAlign.CENTER);
         text.set_x_align(Clutter.ActorAlign.START);
-        tile.add_child(text);
+        row.add_child(text);
         tile._ocText = text;
         tile._ocProject = null;
         tile._ocSubject = null;
         tile._ocId = id;
+        tile._ocFilled = false;
+        tile._ocCooling = false;
+        tile._ocCoolId = 0;
 
         // Clicking a tile acknowledges its finished agent (the green dot) and
         // opens the menu, so the user can act on the session.
@@ -561,10 +633,21 @@ class OpencodeAgentsApplet extends Applet.Applet {
         if (id === Tiles.IDLE || !entry) {
             return;
         }
-        let session = this._known[id] || null;
         let state = entry.state;
+        if (this._cooling[id]) {
+            // The tile is holding its place while its fill retracts: keep the
+            // text it had when the fill ended (the session is already forgotten)
+            // and let the cooldown own the dot's colour.
+            this._paintTile(actor, state);
+            return;
+        }
+        let session = this._known[id] || null;
 
-        this._paintDot(actor._ocDot, state);
+        // While a fill retracts, the cooldown owns the dot's colour; the next
+        // ordinary paint restores it when the fill is gone.
+        if (!actor._ocCooling) {
+            this._paintDot(actor._ocDot, state);
+        }
 
         let text = actor._ocText;
         if (!text) {
@@ -621,21 +704,44 @@ class OpencodeAgentsApplet extends Applet.Applet {
     }
 
     // A tile that waits for a human (red) or whose answer nobody has read yet
-    // (green) fills with the state's colour; the stylesheet class rounds the
-    // fill into a pill and the two text lines turn dark, because the panel's own
-    // text is light and would vanish on it. Every other state clears all of
-    // that, so a tile that starts working, is acknowledged or drops to idle goes
-    // back to the panel background.
+    // (green) fills with the state's colour; the fill layer behind the text
+    // carries it and the two text lines turn dark, because the panel's own text
+    // is light and would vanish on it. Every other state clears all of that, so
+    // a tile that starts working, is acknowledged or drops to idle goes back to
+    // the panel background - except that a fill which has just ended retracts
+    // instead of vanishing (see _coolTile).
     _paintTile(tile, state) {
         let filled = State.fills(state);
-        tile.set_style(filled ? "background-color: " + State.color(state) + ";" : "");
-        if (filled) {
-            tile.add_style_class_name(FILLED_STYLE);
-        } else {
-            tile.remove_style_class_name(FILLED_STYLE);
+        let fill = tile._ocFill;
+        if (fill) {
+            if (filled) {
+                let wasCooling = tile._ocCooling;
+                this._stopCooling(tile);
+                // A fill that came back is on the row's own list again, so the
+                // row no longer has to hold the tile in place.
+                if (tile._ocId) {
+                    delete this._cooling[tile._ocId];
+                }
+                fill.set_style("background-color: " + State.color(state) + ";");
+                fill.remove_clip();
+                fill.visible = true;
+                // A fill that came back owns the dot again, which the cooldown
+                // had been easing towards the state colour.
+                if (wasCooling) {
+                    this._paintDot(tile._ocDot, state);
+                }
+            } else if (tile._ocCooling) {
+                // the cooldown owns the fill until it finishes
+            } else if (tile._ocFilled && this.animateTiles) {
+                this._coolTile(tile, state);
+            } else {
+                fill.visible = false;
+            }
         }
+        tile._ocFilled = filled;
         let text = tile._ocText;
-        if (!text) {
+        if (!text || tile._ocCooling) {
+            // while a fill retracts, the cooldown owns the text and dot colours
             return;
         }
         let ink = filled ? "color: " + State.ink() + ";" : "";
@@ -643,6 +749,194 @@ class OpencodeAgentsApplet extends Applet.Applet {
         for (let i = 0; i < lines.length; i++) {
             lines[i].set_style(ink);
         }
+    }
+
+    // ---- the fill cooldown ---------------------------------------------
+
+    // A fill that has just ended keeps its colour and retracts to the right over
+    // six seconds, the way the studio's sidebar sweeps it away, while the ink
+    // turns back into the panel's text colour. A sweep instead of a fade: a
+    // fading colour passes through muddy mixes on the way out, this one just
+    // gets narrower until the tile is its old self again. The fill layer is
+    // clipped rather than the tile, so the text stays readable on the uncovered
+    // side.
+    _coolTile(tile, state) {
+        let fill = tile._ocFill;
+        if (!fill) {
+            return;
+        }
+        this._stopCooling(tile);
+        let duration = COOL_MS;
+        let target = this._themeTextHex();
+        let dotColour = State.color(state);
+        let dotSize = this.dotSize;
+        let lines = tile._ocText ? tile._ocText.get_children() : [];
+        let dot = tile._ocDot;
+        let started = GLib.get_monotonic_time() / 1000;
+        let self = this;
+        let id = 0;
+        tile._ocCooling = true;
+        fill.remove_clip();
+
+        let step = function () {
+            let elapsed = GLib.get_monotonic_time() / 1000 - started;
+            let p = Easing.progress(elapsed, duration, Easing.LINEAR);
+            try {
+                // The width is read every frame: the row may be re-fitted while
+                // the sweep runs (a title arrives, the panel is resized).
+                let width = fill.get_width();
+                let height = fill.get_height();
+                let left = Math.round(width * p);
+                fill.set_clip(left, 0, Math.max(0, width - left), height);
+                let ink = State.mix(State.ink(), target, p);
+                for (let i = 0; i < lines.length; i++) {
+                    lines[i].set_style("color: " + ink + ";");
+                }
+                if (dot) {
+                    dot.set_style("background-color: " + State.mix(State.ink(), dotColour, p) +
+                        "; border-radius: " + (dotSize / 2) + "px;");
+                }
+            } catch (e) {
+                // The actor went away underneath us (applet removed, a rebuild),
+                // or a lib module is stale after a reload. Either way the fill
+                // must not be left stuck half swept.
+                self._forgetCooling(id, tile);
+                try {
+                    fill.remove_clip();
+                    fill.visible = false;
+                    for (let i = 0; i < lines.length; i++) {
+                        lines[i].set_style("");
+                    }
+                    if (dot) {
+                        dot.set_style("background-color: " + dotColour +
+                            "; border-radius: " + (dotSize / 2) + "px;");
+                    }
+                } catch (ignored) {
+                    // the actor is gone with the applet
+                }
+                self._log("fill cooldown stopped: " + e.message +
+                    " (a change in lib/ needs a Cinnamon restart to load)");
+                // The actor may already be gone: drop the hold without asking for
+                // a render that would touch a destroyed tile. The next poll takes
+                // the row's stale entry out on its own.
+                if (tile._ocId) {
+                    delete self._cooling[tile._ocId];
+                }
+                return GLib.SOURCE_REMOVE;
+            }
+            if (elapsed >= duration) {
+                self._forgetCooling(id, tile);
+                try {
+                    fill.remove_clip();
+                    fill.visible = false;
+                    for (let i = 0; i < lines.length; i++) {
+                        lines[i].set_style("");
+                    }
+                    if (dot) {
+                        dot.set_style("background-color: " + dotColour +
+                            "; border-radius: " + (dotSize / 2) + "px;");
+                    }
+                } catch (e) {
+                    // the actor went away underneath us
+                }
+                self._endCooling(tile);
+                return GLib.SOURCE_REMOVE;
+            }
+            return GLib.SOURCE_CONTINUE;
+        };
+
+        id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, FRAME_MS, step);
+        tile._ocCoolId = id;
+        this._animations.push(id);
+    }
+
+    // The sweep has finished: the tile is no longer held, so the next render
+    // takes it out of the row - an idle tile has nothing left to say. A tile
+    // that filled again during the sweep has already dropped its hold.
+    _endCooling(tile) {
+        if (!tile || !tile._ocId) {
+            return;
+        }
+        delete this._cooling[tile._ocId];
+        if (!this._model) {
+            return;
+        }
+        try {
+            this._renderTiles(this._model);
+        } catch (e) {
+            // the applet is going away; the next render would be its last anyway
+        }
+    }
+
+    // Drops a cooldown's timer without touching the tile's paint, so a tile that
+    // is leaving can finish its slide-out with its fill still on.
+    _forgetCooling(id, tile) {
+        let index = this._animations.indexOf(id);
+        if (index >= 0) {
+            this._animations.splice(index, 1);
+        }
+        if (tile) {
+            tile._ocCoolId = 0;
+            tile._ocCooling = false;
+            return;
+        }
+        for (let key in this._tiles) {
+            let known = this._tiles[key];
+            if (known && known._ocCoolId === id) {
+                known._ocCoolId = 0;
+                known._ocCooling = false;
+            }
+        }
+    }
+
+    // Cancels a cooldown in progress. `keepFill` leaves the fill as it is, for a
+    // tile that is going away anyway.
+    _stopCooling(tile, keepFill) {
+        if (!tile) {
+            return;
+        }
+        let id = tile._ocCoolId;
+        if (id) {
+            this._forgetCooling(id, tile);
+            try {
+                GLib.source_remove(id);
+            } catch (e) {
+                // the timer already fired
+            }
+        }
+        tile._ocCoolId = 0;
+        tile._ocCooling = false;
+        // The row's hold on the tile is not the timer's to drop: a cooldown that
+        // is just starting calls this too, and the tile must stay in the row
+        // while the sweep runs. _endCooling, _removeTile and _paintTile release
+        // the hold at the points where the tile really stops retracting.
+        if (!keepFill && tile._ocFill) {
+            tile._ocFill.remove_clip();
+        }
+    }
+
+    // The panel's own text colour, as "#rrggbb", so a cooling tile's ink can end
+    // up at the colour the tile would have had without a fill. The row's theme
+    // node is asked, not the tile's labels: those carry the ink while filled.
+    _themeTextHex() {
+        let actors = [this._tilesBox, this.actor];
+        for (let i = 0; i < actors.length; i++) {
+            try {
+                let node = actors[i] ? actors[i].get_theme_node() : null;
+                if (!node) {
+                    continue;
+                }
+                let colour = node.get_foreground_color();
+                if (colour) {
+                    return "#" + hexChannel(colour.red) + hexChannel(colour.green) +
+                        hexChannel(colour.blue);
+                }
+            } catch (e) {
+                // fall through to the next source
+            }
+        }
+        // The panel theme's own light text, if nothing could be measured.
+        return "#e1e1e1";
     }
 
     // ---- the working pulse ---------------------------------------------
@@ -768,9 +1062,13 @@ class OpencodeAgentsApplet extends Applet.Applet {
     _removeTile(id, animate) {
         let actor = this._tiles[id];
         delete this._tiles[id];
+        delete this._cooling[id];
         if (!actor) {
             return;
         }
+        // A tile leaving mid-cooldown keeps its fill: the slide-out is its own
+        // animation, and a fill snapping back would flash just before it goes.
+        this._stopCooling(actor, true);
         if (!animate) {
             actor.destroy();
             return;

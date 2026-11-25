@@ -289,6 +289,29 @@ function testTiles() {
     equal("tiles: entry lookup for a marker", Tiles.entryFor(Tiles.OVERFLOW, [a, b]), null);
     equal("tiles: entry lookup for something gone", Tiles.entryFor("ses_z", [a, b]), null);
 
+    // A fill that ends stays in the row while it retracts: the tile keeps its
+    // position so the sweep does not happen on a row that is reflowing under it.
+    let held = {};
+    let kept = Tiles.hold(["ses_a", "ses_b"], [a], { ses_b: true }, held);
+    equal("tiles: a retracting tile is held in place", kept.map(function (e) { return e.id; }).join(","), "ses_a,ses_b");
+    equal("tiles: the held tile is idle", kept[1].state, "idle");
+    check("tiles: the hold is recorded", held.ses_b === true);
+    // A tile that is still in the list needs no hold, and a marker never does.
+    let notHeld = {};
+    equal("tiles: a listed tile is not held",
+        Tiles.hold(["ses_a"], [a], { ses_a: true }, notHeld).map(function (e) { return e.id; }).join(","), "ses_a");
+    equal("tiles: nothing recorded for a listed tile", Object.keys(notHeld).length, 0);
+    let markerHeld = {};
+    equal("tiles: a marker is never held",
+        Tiles.hold([Tiles.IDLE], [], { }, markerHeld).map(function (e) { return e.id; }).join(","), "");
+    equal("tiles: nothing recorded for a marker", Object.keys(markerHeld).length, 0);
+    let markerFilled = {};
+    let markerFill = {};
+    markerFill[Tiles.IDLE] = true;
+    equal("tiles: a marker is never held even if it looks filled",
+        Tiles.hold([Tiles.IDLE], [], markerFill, markerFilled).map(function (e) { return e.id; }).join(","), "");
+    equal("tiles: nothing recorded for a filled marker", Object.keys(markerFilled).length, 0);
+
     // width fitting: every tile keeps its natural width while there is room
     equal("widths: room to spare", Tiles.fitWidths([40, 60], 200).join(","), "40,60");
     equal("widths: exactly enough", Tiles.fitWidths([40, 60], 100).join(","), "40,60");
@@ -401,12 +424,20 @@ function testLookAndFeel() {
     check("look: the applet paints the dot from the state", !!applet && applet.indexOf("State.color") >= 0, "");
     check("look: an unread finish fills the whole tile",
         !!applet && applet.indexOf("_paintTile") >= 0 && applet.indexOf("State.fills") >= 0 &&
-        !!css && css.indexOf(".opencode-agents-tile-filled") >= 0, "");
+        !!css && css.indexOf(".opencode-agents-tile-fill") >= 0, "");
     check("look: the applet pulses the working dot", !!applet && applet.indexOf("pulseOpacity") >= 0 && applet.indexOf("_syncPulse") >= 0, "");
     check("look: the applet keeps two lines per tile", !!applet && applet.indexOf("opencode-agents-tile-project") >= 0 &&
         applet.indexOf("opencode-agents-tile-subject") >= 0, "");
     check("look: clicking a tile acknowledges it", !!applet && applet.indexOf("_acknowledge") >= 0, "");
     check("look: a finished agent stays until acknowledged", !!applet && applet.indexOf("State.resolve") >= 0, "");
+    // A fill that ends retracts in place over the studio's six seconds, and the
+    // tile is held in the row until the sweep is done, so the read-status
+    // transition reads the same as the studio's sidebar.
+    check("look: an ending fill retracts in place",
+        !!applet && applet.indexOf("_coolTile") >= 0 && applet.indexOf("COOL_MS") >= 0 &&
+        applet.indexOf("_endCooling") >= 0, "");
+    check("look: a retracting tile is held in the row",
+        !!applet && applet.indexOf("this._cooling") >= 0 && applet.indexOf("_cooling[id]") >= 0, "");
 }
 
 // Every setting the applet binds must exist in the schema, or the binding

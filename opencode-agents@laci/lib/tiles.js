@@ -41,6 +41,38 @@ function plan(previous, entries, maxTiles) {
     };
 }
 
+// Keeps a tile whose fill is ending in the row while the colour retracts, so
+// the read-status transition reads like the studio's sidebar: the fill sweeps
+// away in place instead of the whole tile leaving at once. A held tile is
+// returned as an idle entry at its own position, so the row does not reflow
+// under the sweep; the applet drops it once the sweep finishes.
+//
+// previous: ids currently in the row ([] on the first run)
+// entries: the displayed entries, most interesting first, each with an `id`
+// filled: { id: true } for tiles whose fill is on or already retracting
+// held: { id: true } - filled in with the ids that are being held
+function hold(previous, entries, filled, held) {
+    let list = entries || [];
+    let result = list.slice();
+    let present = {};
+    for (let i = 0; i < list.length; i++) {
+        present[list[i].id] = true;
+    }
+    let before = previous || [];
+    for (let i = 0; i < before.length; i++) {
+        let id = before[i];
+        if (present[id] || isMarker(id) || !filled || !filled[id]) {
+            continue;
+        }
+        if (held) {
+            held[id] = true;
+        }
+        result.splice(Math.min(i, result.length), 0, { id: id, state: "idle" });
+        present[id] = true;
+    }
+    return result;
+}
+
 // Reserved id for a session slot, or null when the id is a real session.
 function isMarker(id) {
     return id === IDLE || id === OVERFLOW;

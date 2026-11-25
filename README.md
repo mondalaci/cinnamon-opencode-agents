@@ -45,9 +45,12 @@ below.
 - **`+N`** - more agents are working than the tile limit allows.
 - **Motion** - a session that starts slides in from the left and fades in; one
   that leaves slides out to the left and fades out, while the tiles to its right
-  take the freed space back so the row never jumps. While any agent works its
-  dot breathes, exactly as the studio's working dot does. Turn it off with
-  *Animate new and finished agents*.
+  take the freed space back so the row never jumps. A fill that stops being
+  needed - the block was answered, or the finish was read - sweeps away to the
+  right over six seconds while its tile stays in place, exactly as the studio's
+  sidebar retracts the same fill; only then does the tile leave. While any agent
+  works its dot breathes, exactly as the studio's working dot does. Turn it off
+  with *Animate new and finished agents*.
 - **Idle** - a dimmed robot icon, or nothing at all if you prefer
   (*Hide the panel icon when no agent is working*).
 - **Never any desktop notification** - the applet only draws in the panel. The
