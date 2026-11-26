@@ -173,6 +173,13 @@ function testState() {
         !State.fills("working") && !State.fills("idle"), "");
     check("state: the ink is dark", /^#[0-9a-f]{6}$/.test(State.ink()) &&
         parseInt(State.ink().slice(1, 3), 16) < 0x40, State.ink());
+    // The working bar's track is the segment's amber, only dimmed, so the two
+    // can never drift apart; an alpha is the only thing that changes.
+    equal("state: a colour at an alpha", State.alpha("#d29922", 0.3), "rgba(210,153,34,0.3)");
+    equal("state: an alpha above one is opaque", State.alpha("#d29922", 4), "rgba(210,153,34,1)");
+    equal("state: an alpha below zero is invisible", State.alpha("#d29922", -1), "rgba(210,153,34,0)");
+    equal("state: a string that is not a colour comes back untouched",
+        State.alpha("rgba(1,2,3,0.5)", 0.3), "rgba(1,2,3,0.5)");
 
     let running = [{ id: "a", status: "running" }];
     equal("state: a running session works", State.resolve({}, running, {}).a, "working");
@@ -195,13 +202,13 @@ function testState() {
     // the panel must never turn one of those green out of its own history.
     equal("state: a reported finish that has been read stays idle",
         State.resolve({ a: "working" }, [{ id: "a", status: "idle", done: false, seen: true }], {}).a, "idle");
-    equal("state: a reported read finish is not revived by an earlier dot",
+    equal("state: a reported read finish is not revived by an earlier state",
         State.resolve({ a: "done" }, [{ id: "a", status: "idle", done: false, seen: true }], {}).a, "idle");
     equal("state: a fresh idle session", State.resolve({}, [{ id: "a", status: "idle" }], {}).a, "idle");
     // A session the monitor still reports as idle - and does not flag as done -
-    // is one whose finish has been read, so it is not a dot. Only a session the
+    // is one whose finish has been read, so it is not shown. Only a session the
     // monitor has stopped mentioning keeps the finish it was heading for.
-    equal("state: a reported idle session is not a dot",
+    equal("state: a reported idle session is not shown",
         State.resolve({ a: "working" }, [{ id: "a", status: "idle" }], {}).a, "idle");
     equal("state: a session that vanished is done", State.resolve({ a: "working" }, [], {}).a, "done");
     equal("state: done sticks", State.resolve({ a: "done" }, [], {}).a, "done");
@@ -340,15 +347,30 @@ function testEasing() {
     equal("easing: interpolate", Easing.value(-48, 0, 0.5), -24);
     equal("easing: interpolate upwards", Easing.value(0, 255, 0.25), 63.75);
 
-    // the working dot breathes: bright at the start and the end of a cycle,
-    // dimmest in the middle
-    equal("easing: pulse starts bright", Easing.pulseOpacity(0), Easing.PULSE_MAX_OPACITY);
-    equal("easing: pulse dims in the middle", Easing.pulseOpacity(Easing.PULSE_PERIOD_MS / 2), Easing.PULSE_MIN_OPACITY);
-    equal("easing: pulse comes back", Easing.pulseOpacity(Easing.PULSE_PERIOD_MS), Easing.PULSE_MAX_OPACITY);
-    check("easing: pulse stays in range", (function () {
-        for (let ms = 0; ms <= Easing.PULSE_PERIOD_MS; ms += 25) {
-            let value = Easing.pulseOpacity(ms);
-            if (value < Easing.PULSE_MIN_OPACITY || value > Easing.PULSE_MAX_OPACITY) {
+    // the working bar sweeps: a segment enters from behind the left edge,
+    // crosses the tile and leaves behind the right one, then starts again
+    let half = Easing.barSegment(Easing.BAR_PERIOD_MS / 2, 100);
+    equal("easing: the segment is centred half way", Math.round(half.x), 34);
+    equal("easing: the segment is a share of the width", Math.round(half.width), 32);
+    equal("easing: the sweep starts off the left edge", Math.round(Easing.barSegment(0, 100).width), 0);
+    equal("easing: the sweep comes back", Math.round(Easing.barSegment(Easing.BAR_PERIOD_MS, 100).width), 0);
+    let entering = Easing.barSegment(Easing.BAR_PERIOD_MS * 0.1, 100);
+    equal("easing: an entering segment is cut at the left edge", Math.round(entering.x), 0);
+    check("easing: the entering segment is partial",
+        entering.width > 0 && entering.width < half.width, String(entering.width));
+    let leaving = Easing.barSegment(Easing.BAR_PERIOD_MS * 0.9, 100);
+    check("easing: a leaving segment is cut at the right edge",
+        leaving.x + leaving.width <= 100 && leaving.width < half.width,
+        leaving.x + "+" + leaving.width);
+    // A wide tile gets a longer segment, a narrow one a shorter, and a tile
+    // with no width at all has nothing to draw.
+    equal("easing: the segment scales with the tile",
+        Math.round(Easing.barSegment(Easing.BAR_PERIOD_MS / 2, 50).width), 16);
+    equal("easing: a tile with no width", Easing.barSegment(0, 0).width, 0);
+    check("easing: the segment never leaves the tile", (function () {
+        for (let ms = 0; ms <= Easing.BAR_PERIOD_MS; ms += 20) {
+            let part = Easing.barSegment(ms, 100);
+            if (part.x < 0 || part.width < 0 || part.x + part.width > 100.0001) {
                 return false;
             }
         }
@@ -381,7 +403,7 @@ function testAgentIcon() {
     check("icons: the icon is in the panel tone", !!svg && svg.indexOf("#c6cdd6") >= 0, "");
     equal("icons: the icon name", AgentIcon.ICON_FILE, "lucide-bot");
 
-    // the standalone inverted artwork is gone: the dots carry the state now
+    // the standalone inverted artwork is gone: the tiles carry the state now
     check("icons: there is no inverted twin any more", readFile(APPLET_DIR + "/icons/lucide-bot-inverted.svg") === null, "");
     check("icons: the module no longer offers an inverted path", AgentIcon.invertedPathFor === undefined, "");
 
@@ -398,12 +420,14 @@ function testAgentIcon() {
 
 // --------------------------------------------------------- look and feel
 
-// The tile look is split between the stylesheet (the tile, the dot, the two
-// lines) and the applet (the state colours and the pulse), so both are checked.
+// The tile look is split between the stylesheet (the tile, the working bar, the
+// two lines) and the applet (the state colours and the sweep), so both are
+// checked.
 function testLookAndFeel() {
     let css = readFile(APPLET_DIR + "/stylesheet.css");
     check("look: the stylesheet defines the tile", !!css && css.indexOf(".opencode-agents-tile") >= 0, "");
-    check("look: the stylesheet defines the dot", !!css && css.indexOf(".opencode-agents-dot") >= 0, "");
+    check("look: the stylesheet defines the working bar",
+        !!css && css.indexOf(".opencode-agents-bar") >= 0 && css.indexOf(".opencode-agents-bar-track") >= 0, "");
     check("look: the stylesheet defines the project line", !!css && css.indexOf(".opencode-agents-tile-project") >= 0, "");
     check("look: the stylesheet defines the subject line", !!css && css.indexOf(".opencode-agents-tile-subject") >= 0, "");
     // The panel theme centres text; a label wider than its line would centre
@@ -421,11 +445,13 @@ function testLookAndFeel() {
         !!css && /\.opencode-agents-tile\s*\{[^}]*padding/.test(css), "");
 
     let applet = readFile(APPLET_DIR + "/applet.js");
-    check("look: the applet paints the dot from the state", !!applet && applet.indexOf("State.color") >= 0, "");
+    check("look: the applet paints the bar from the state",
+        !!applet && applet.indexOf("State.color") >= 0 && applet.indexOf("State.alpha") >= 0, "");
     check("look: an unread finish fills the whole tile",
         !!applet && applet.indexOf("_paintTile") >= 0 && applet.indexOf("State.fills") >= 0 &&
         !!css && css.indexOf(".opencode-agents-tile-fill") >= 0, "");
-    check("look: the applet pulses the working dot", !!applet && applet.indexOf("pulseOpacity") >= 0 && applet.indexOf("_syncPulse") >= 0, "");
+    check("look: the applet sweeps the working bar",
+        !!applet && applet.indexOf("barSegment") >= 0 && applet.indexOf("_syncBar") >= 0, "");
     check("look: the applet keeps two lines per tile", !!applet && applet.indexOf("opencode-agents-tile-project") >= 0 &&
         applet.indexOf("opencode-agents-tile-subject") >= 0, "");
     check("look: clicking a tile acknowledges it", !!applet && applet.indexOf("_acknowledge") >= 0, "");
@@ -461,11 +487,11 @@ function testSettingsSchema() {
     let missing = bound.filter(function (key) { return schema[key] === undefined; });
     equal("settings: every bound key is in the schema", missing.join(","), "");
 
-    check("settings: the dot size is offered", schema["dot-size"] && schema["dot-size"].type === "spinbutton", "");
+    check("settings: the removed dot size is gone", schema["dot-size"] === undefined, "");
     check("settings: there is no text-length cap any more",
         schema["tile-project-length"] === undefined && schema["tile-subject-length"] === undefined,
         Object.keys(schema).filter(function (key) { return key.indexOf("tile-") === 0; }).join(","));
-    check("settings: the pulse is documented", schema["animate-tiles"].tooltip.indexOf("pulse") >= 0, schema["animate-tiles"].tooltip);
+    check("settings: the sweep is documented", schema["animate-tiles"].tooltip.indexOf("sweeps") >= 0, schema["animate-tiles"].tooltip);
     check("settings: the service file is offered", !!schema["use-service"] && !!schema["service-file"], "");
 }
 

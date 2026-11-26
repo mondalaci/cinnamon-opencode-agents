@@ -141,7 +141,7 @@ function fitWidths(desires, budget) {
 }
 
 // What the tile for an id should look like - used to notice that a kept tile
-// needs its texts or dot refreshed.
+// needs its texts or bar refreshed.
 function entryFor(id, entries) {
     if (isMarker(id)) {
         return null;

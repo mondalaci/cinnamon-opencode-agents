@@ -39,17 +39,32 @@ function value(from, to, p) {
     return from + (to - from) * p;
 }
 
-// The working dot pulses: its opacity breathes between MIN and MAX over PERIOD
-// milliseconds, in phase, so every working tile blinks together. Returns the
-// opacity (0..255) at `elapsed` ms into the cycle.
-var PULSE_MAX_OPACITY = 255;
-var PULSE_MIN_OPACITY = 96;
-var PULSE_PERIOD_MS = 1400;
+// The working bar sweeps: a bright segment crosses the tile from left to right
+// and starts again, forever, the indeterminate progress bar the panel shows
+// while an agent works. Both ends run off the tile, so what is left is a
+// segment that grows out of the left edge, crosses and shrinks into the right
+// one. Returns the visible stretch as { x, width } in the tile's pixels -
+// already cut at the edges, so the applet can clip a full-width layer with it
+// without ever touching the tile's allocation.
+var BAR_PERIOD_MS = 1400;   // one crossing, from off the left to off the right
+var BAR_SEGMENT = 0.32;     // the bright part's share of the tile's width
 
-function pulseOpacity(elapsed) {
-    let period = PULSE_PERIOD_MS;
+function barSegment(elapsed, width, segment) {
+    let tile = Math.max(0, width || 0);
+    if (tile <= 0) {
+        return { x: 0, width: 0 };
+    }
+    let share = segment > 0 && segment <= 1 ? segment : BAR_SEGMENT;
+    let length = Math.max(4, tile * share);
+    let period = BAR_PERIOD_MS;
     let t = ((elapsed % period) + period) % period / period;
-    // cosine: starts at the bright end, dips once per period
-    let phase = (1 - Math.cos(2 * Math.PI * t)) / 2;
-    return Math.round(PULSE_MAX_OPACITY - (PULSE_MAX_OPACITY - PULSE_MIN_OPACITY) * phase);
+    // -length .. width: the segment enters from behind the left edge and leaves
+    // behind the right one, so the sweep has no dead moment at the wrap.
+    let start = -length + t * (tile + length);
+    let left = Math.max(0, start);
+    let right = Math.min(tile, start + length);
+    if (right <= left) {
+        return { x: 0, width: 0 };
+    }
+    return { x: left, width: right - left };
 }

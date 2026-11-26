@@ -62,7 +62,6 @@
             "type": "section",
             "title": "Agent tiles",
             "keys": [
-                "dot-size",
                 "tile-show-project",
                 "tile-show-subject",
                 "tiles-max",
@@ -236,16 +235,6 @@
         "type": "label",
         "description": "The command runs from the applet when you use 'Run command for this session' in a session's submenu."
     },
-    "dot-size": {
-        "type": "spinbutton",
-        "default": 12,
-        "min": 4,
-        "max": 24,
-        "step": 1,
-        "units": "pixels",
-        "description": "Status dot size",
-        "tooltip": "Diameter of the state dot at the head of every tile."
-    },
     "tile-show-project": {
         "type": "switch",
         "default": true,
@@ -275,10 +264,10 @@
         "type": "switch",
         "default": true,
         "description": "Animate new and finished agents",
-        "tooltip": "A session that starts slides in from the left; one that leaves slides out. While an agent works, its dot pulses. Turn off for instant changes and a steady dot."
+        "tooltip": "A session that starts slides in from the left; one that leaves slides out. While an agent works, a thin bar sweeps across the top of its tile. Turn off for instant changes and a steady bar."
     },
     "tiles-info": {
         "type": "label",
-        "description": "Every agent gets a tile: the project over the conversation subject, with a status dot to their left. The dot follows the opencode project studio: red blocked (the agent waits for you), amber working (pulsing), green finished and not yet acknowledged, grey idle. A conversation that stopped within 'Keep finished agents for' shows its green dot too, even if the applet did not watch it run. Clicking a green tile acknowledges it, and it slides away. The menu lists every session with its project, agent, model and status. The applet never shows desktop notifications."
+        "description": "Every agent gets a tile: the project over the conversation subject, with a thin amber bar along its top edge that sweeps while the agent works. The colours follow the opencode project studio: a blocked tile (the agent waits for you) fills red, an unread finish fills green, and a working one keeps the panel background. Clicking a green tile acknowledges it, and it slides away. The menu lists every session with its project, agent, model and status. The applet never shows desktop notifications."
     }
 }

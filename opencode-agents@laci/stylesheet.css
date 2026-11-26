@@ -4,19 +4,27 @@
     spacing: 10px;
 }
 
-/* A tile is a status dot with two lines of text (project over conversation
-   subject). The padding belongs to every tile, not to a come-and-go state
-   class, so nothing can change the tile's size and shuffle the row. */
+/* A tile is two lines of text (project over conversation subject), with a thin
+   progress bar along its top edge that sweeps while the agent works. The
+   padding belongs to every tile, not to a come-and-go state class, so nothing
+   can change the tile's size and shuffle the row. */
 .opencode-agents-tile {
     spacing: 6px;
     padding: 1px 5px;
 }
 
-/* A session tile is a bin: the fill layer behind, the row's content on top. The
-   padding belongs to the content, so the fill covers the whole pill, corners
-   included - padding on the tile would leave a rim of panel around it. */
+/* A session tile is a bin: the fill layer behind, and the column on top of it,
+   which carries the bar's row over the content row. The padding belongs to the
+   content, so the fill covers the whole pill, corners included - padding on the
+   tile would leave a rim of panel around it. */
 .opencode-agents-tile-session {
     padding: 0px;
+}
+
+/* The tile's column: the bar's row above, the content row below, and no gap
+   between them - the content's own padding is the gap. */
+.opencode-agents-tile-column {
+    spacing: 0px;
 }
 
 .opencode-agents-tile-content {
@@ -24,10 +32,19 @@
     padding: 1px 5px;
 }
 
-/* The dot is sized and coloured from the applet (lib/state.js), because the
-   colour follows the session's state and the size is a setting. */
-.opencode-agents-dot {
-    border-radius: 50%;
+/* The bar's 2px row. It keeps its height whether or not a bar is drawn on it,
+   so a tile that starts or stops working never changes size; the applet hides
+   the two layers inside instead. */
+.opencode-agents-bar-area {
+    height: 2px;
+}
+
+/* The working bar: a dim track along the tile's top edge, and the slightly
+   brighter segment sweeping across it. Both carry their colour from the applet
+   (it is the state's), and both fill the 2px area. */
+.opencode-agents-bar-track,
+.opencode-agents-bar {
+    border-radius: 1px;
 }
 
 /* A blocked tile (red) and an unread finish (green) fill with the state colour.

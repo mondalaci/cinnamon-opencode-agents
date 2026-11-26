@@ -1,4 +1,4 @@
-// Conversation states for the panel dots.
+// Conversation states for the panel tiles.
 //
 // The vocabulary, the precedence and the colours come from
 // opencode-projects-studio, whose sidebar carries one dot per conversation:
@@ -12,7 +12,7 @@
 // studio's dark-theme ones (--git-deleted / --git-modified / --git-added and
 // its neutral grey), which is what the panel's own dark tone wants. A blocked
 // tile is filled with that red and a `done` one with the green, so both stand
-// out instead of only carrying a dot.
+// out from the working tiles and their amber bar.
 //
 // Pure: no Cinnamon, no I/O, so the test suite covers it directly.
 
@@ -41,6 +41,19 @@ function color(state) {
     return COLORS[state] || COLORS.idle;
 }
 
+// A state colour at the given alpha, as a css "rgba(...)" string. The working
+// bar's track is the same amber as its segment, only dim enough to read as the
+// path the segment runs along, instead of a second competing line. A string
+// that is not a hex colour comes back untouched.
+function alpha(colour, value) {
+    let rgb = parseHex(colour);
+    if (!rgb) {
+        return colour;
+    }
+    let a = value <= 0 ? 0 : (value >= 1 ? 1 : value);
+    return "rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + "," + a + ")";
+}
+
 function label(state) {
     return LABELS[state] || "idle";
 }
@@ -54,8 +67,8 @@ function ink() {
 // permission request, or a question with its choices), and an unread finish,
 // because the answer arrived while the user was looking elsewhere. Both have to
 // be visible from across the room. Work and idle keep the panel background -
-// the dot says all there is to say about them, and a row of filled working
-// tiles would be a wall of colour that shouts about nothing new.
+// the working bar says all there is to say about a running turn, and a row of
+// filled working tiles would be a wall of colour that shouts about nothing new.
 function fills(state) {
     return state === "blocked" || state === "done";
 }
@@ -70,7 +83,7 @@ function rank(state) {
 // human is blocked, whatever else it claims; an offline session waits on the
 // network and so needs the user the same way. `session.done` is the monitor's
 // mark for a conversation that finished recently and has not been seen since,
-// which is what gives it a green dot even on the applet's first poll. Anything
+// which is what gives it a green tile even on the applet's first poll. Anything
 // the server is not running right now is idle.
 function rawState(session) {
     if (!session) {
@@ -92,7 +105,8 @@ function rawState(session) {
     return "idle";
 }
 
-// Folds the live sessions and the previous pass into the dots the panel shows.
+// Folds the live sessions and the previous pass into the states the panel
+// shows.
 //
 // What the monitor reports decides the state: a session waiting for a human is
 // blocked, one that is running is working, one whose finish nobody has read

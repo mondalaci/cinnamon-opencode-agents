@@ -1,7 +1,7 @@
 {
     "uuid": "opencode-agents@laci",
     "name": "OpenCode Agents",
-    "description": "Shows, in the panel, the opencode conversations with an agent working right now: one tile per agent, carrying a status dot, the project and the conversation subject.",
+    "description": "Shows, in the panel, the opencode conversations with an agent working right now: one tile per agent, carrying the project, the conversation subject and a thin progress bar along its top edge that sweeps while the agent works.",
     "version": "2.0.0",
     "cinnamon-version": [
         "5.4",

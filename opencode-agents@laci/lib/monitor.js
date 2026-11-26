@@ -52,7 +52,7 @@ async function mapLimit(items, limit, worker) {
     return results;
 }
 
-// "permission: bash" - the short reason a session is blocked, for the dot's
+// "permission: bash" - the short reason a session is blocked, for the tile's
 // tooltip and the menu. A question is just a question.
 function blockedReason(entry) {
     if (entry.kind === "question") {
@@ -342,8 +342,8 @@ var Monitor = class Monitor {
 
         // The newest root conversation of every project - the row the studio's
         // dot belongs to - whether or not anybody has read it. A finish nobody
-        // has read is a green dot; one that has been read is reported as plain
-        // idle, which is what stops the panel inventing a green dot for a
+        // has read is a green tile; one that has been read is reported as plain
+        // idle, which is what stops the panel inventing a green tile for a
         // conversation the studio already shows grey. The list is ordered by
         // activity, so the first entry seen for a directory is that project's
         // newest conversation.
@@ -428,7 +428,7 @@ var Monitor = class Monitor {
             blocked: !!blocked,
             done: !!ctx.done,
             // Finished and already read: reported so the panel knows the
-            // conversation is not news, never shown as a dot of its own.
+            // conversation is not news, never shown as a green tile of its own.
             seen: !!ctx.seen,
             blockedReason: blocked ? blockedReason(blocked) : null,
             blockedDetail: blocked ? blockedDetail(blocked) : null,

@@ -2,21 +2,23 @@
 // now.
 //
 // The panel lists one tile per live conversation, side by side. A tile is two
-// lines of text with a status dot to their left:
+// lines of text, project over conversation subject, with a thin progress bar
+// along its top edge while the agent works:
 //
-//     ●  uhk.io
-//        Fix the widget tests
+//     ▔▔▔▔▔▔▔▔▔▔▔▔▔
+//      uhk.io
+//      Fix the widget tests
 //
-// The top line is the project, the bottom line the conversation's subject. The
-// dot carries the state, with the vocabulary and colours of the opencode
+// The tile carries the state, with the vocabulary and colours of the opencode
 // project studio: red blocked (an agent waits for you), amber working, green
-// finished but not yet acknowledged, grey nothing to do. A working dot pulses,
-// a tile that waits for a human burns red and one whose answer nobody has read
-// turns green, and clicking such a tile acknowledges it, so it slides away.
+// finished but not yet acknowledged, grey nothing to do. While an agent works
+// an amber segment sweeps along the bar, a tile that waits for a human burns red
+// and one whose answer nobody has read turns green, and clicking such a tile
+// acknowledges it, so it slides away.
 //
 // The menu has the details (project, agent, model, status, cost) and the
-// per-session actions. See lib/state.js for the dots and lib/monitor.js for the
-// polling.
+// per-session actions. See lib/state.js for the tile states and lib/monitor.js
+// for the polling.
 
 const Applet = imports.ui.applet;
 const Clutter = imports.gi.Clutter;
@@ -46,7 +48,9 @@ const REFRESH_ICON = "view-refresh-symbolic";
 const SETTINGS_ICON = "preferences-system-symbolic";
 const SEEN_ICON = "object-select-symbolic";
 const OVERFLOW_STYLE = "opencode-agents-tile-overflow";
-const DOT_STYLE = "opencode-agents-dot";
+const BAR_STYLE = "opencode-agents-bar";
+const BAR_TRACK_STYLE = "opencode-agents-bar-track";
+const BAR_AREA_STYLE = "opencode-agents-bar-area";
 const FILL_STYLE = "opencode-agents-tile-fill";
 const IN_ANIMATION_MS = 250;
 const OUT_ANIMATION_MS = 200;
@@ -54,15 +58,23 @@ const OUT_ANIMATION_MS = 200;
 // Kept in step with the studio's sidebar, which sweeps the same 6 s.
 const COOL_MS = 6000;
 const FRAME_MS = 16;
-const PULSE_FRAME_MS = 40;
 const IDLE_ICON_SIZE = 20;
+// The working bar is meant to be felt, not stared at: the track is the amber at
+// roughly a third of its strength and the sweeping segment only a little
+// stronger, so the motion is what catches the eye and the colour does not.
+const BAR_TRACK_ALPHA = 0.36;
+const BAR_SEGMENT_ALPHA = 0.55;
+// How far a tile travels when it slides in or out: a step of its own, enough to
+// read as motion without waiting for a full tile width.
+const SLIDE_DISTANCE = 24;
 // Device pixels kept free beside the other panel applets, so a full row never
 // reaches the point where the panel starts squeezing every box to its minimum.
 const PANEL_MARGIN = 8;
 
 // What the panel is about: a session waiting for a human, one that is running,
 // or a finish nobody has read yet. The monitor also reports the conversations
-// that *have* been read, but only so a dot can never be invented for them.
+// that *have* been read, but only so a green tile can never be invented for
+// them.
 function isWorthListing(session) {
     return !!(session && (session.blocked || session.done || session.status === "running"));
 }
@@ -133,11 +145,11 @@ class OpencodeAgentsApplet extends Applet.Applet {
         this._tileIds = [];       // the row as currently drawn, left to right
         this._tilesAppearance = null;
         this._tilesRendered = false;
-        this._states = {};        // session id -> dot state (blocked/working/done/idle)
+        this._states = {};        // session id -> tile state (blocked/working/done/idle)
         this._known = {};         // session id -> last known session info
         this._acknowledged = {};  // session id -> true, once the user has seen it
         this._cooling = {};       // session id -> true, while its fill retracts
-        this._pulseTimer = 0;
+        this._barTimer = 0;
         this._resizeQueued = false;
         this._resizeIdle = 0;
         this._panelSignals = [];  // [actor, handler id] for the panel resize watch
@@ -231,7 +243,6 @@ class OpencodeAgentsApplet extends Applet.Applet {
         this.settings.bind("tiles-max", "tilesMax", this._onAppearanceChanged);
         this.settings.bind("tile-show-project", "tileShowProject", this._onAppearanceChanged);
         this.settings.bind("tile-show-subject", "tileShowSubject", this._onAppearanceChanged);
-        this.settings.bind("dot-size", "dotSize", this._onAppearanceChanged);
         this.settings.bind("hide-when-idle", "hideWhenIdle", this._onAppearanceChanged);
         this.settings.bind("animate-tiles", "animateTiles", this._onAppearanceChanged);
         this.settings.bind("tooltip-lines", "tooltipLines", this._onAppearanceChanged);
@@ -287,8 +298,8 @@ class OpencodeAgentsApplet extends Applet.Applet {
         this._applyModel(model);
     }
 
-    // Folds the live sessions into the dots, keeping a finished agent visible
-    // until the user acknowledges it. See lib/state.js.
+    // Folds the live sessions into the tile states, keeping a finished agent
+    // visible until the user acknowledges it. See lib/state.js.
     _advanceStates(model) {
         let sessions = model ? model.sessions : [];
         let present = {};
@@ -355,7 +366,7 @@ class OpencodeAgentsApplet extends Applet.Applet {
     // are only moved and refreshed.
     _renderTiles(model) {
         let appearance = [this.tilesMax, this.tileShowProject,
-                          this.tileShowSubject, this.dotSize, this.hideWhenIdle].join("|");
+                          this.tileShowSubject, this.hideWhenIdle].join("|");
 
         if (appearance !== this._tilesAppearance) {
             // A visual setting changed: rebuild instantly, nothing to animate.
@@ -392,7 +403,7 @@ class OpencodeAgentsApplet extends Applet.Applet {
         this._resizeTiles(plan.order);
         this._tilesRendered = true;
         this._tilesBox.visible = !(entries.length === 0 && this.hideWhenIdle);
-        this._syncPulse();
+        this._syncBar();
     }
 
     // Fits the tile row into the room the panel leaves beside the other
@@ -430,10 +441,10 @@ class OpencodeAgentsApplet extends Applet.Applet {
         let gaps = this._tileSpacing() * Math.max(0, tiles.length - 1);
         let room = Math.max(0, budget - PANEL_MARGIN - this._actorPadding() - gaps);
 
-        // The dot-only and marker tiles keep their natural size; only the tiles
-        // that actually carry text take part in the split. What a tile spends
-        // on its dot, padding and spacing is not up for sharing, so it comes
-        // off the budget before the text is fitted.
+        // The marker tiles (the idle icon, the +N count) keep their natural size;
+        // only the tiles that actually carry text take part in the split. What a
+        // tile spends on its padding is not up for sharing, so it comes off the
+        // budget before the text is fitted.
         let flexible = [];
         let desires = [];
         let minimums = [];
@@ -511,7 +522,7 @@ class OpencodeAgentsApplet extends Applet.Applet {
     }
 
     _dropTiles() {
-        this._stopPulse();
+        this._stopBar();
         for (let id in this._tiles) {
             this._stopCooling(this._tiles[id]);
             this._tiles[id].destroy();
@@ -538,12 +549,13 @@ class OpencodeAgentsApplet extends Applet.Applet {
         return this._sessionTile(id, entry);
     }
 
-    // One agent: a status dot, and the project over the conversation subject.
+    // One agent: the project over the conversation subject, with the working
+    // bar over the project line.
     //
-    // The tile is a bin, not a row: the fill layer sits behind the row's content.
-    // The fill has to be its own actor, because the cooldown retracts it while
-    // the text stays readable on the uncovered side - a clip on the tile itself
-    // would sweep the text away with the colour.
+    // The tile is a bin, not a row: the fill layer sits behind the column's
+    // content. The fill has to be its own actor, because the cooldown retracts
+    // it while the text stays readable on the uncovered side - a clip on the
+    // tile itself would sweep the text away with the colour.
     _sessionTile(id, entry) {
         let tile = new St.Widget({
             style_class: "opencode-agents-tile opencode-agents-tile-session",
@@ -567,6 +579,60 @@ class OpencodeAgentsApplet extends Applet.Applet {
         tile.add_child(fill);
         tile._ocFill = fill;
 
+        // The working bar: a dim track along the top edge and the bright
+        // segment that sweeps across it. It is the first row of the tile's own
+        // column, not a layer hung off the bin: a bin child cannot be pinned to
+        // the top edge (Clutter's bin layout centres it, whatever its y-align
+        // says), and the bar belongs over the project line, not between it and
+        // the subject. The area keeps its height whether or not a bar is on it,
+        // so a tile never resizes when its agent starts or stops working.
+        let barArea = new St.Widget({
+            style_class: BAR_AREA_STYLE,
+            reactive: false,
+        });
+        barArea.set_layout_manager(new Clutter.BinLayout());
+        barArea.set_x_align(Clutter.ActorAlign.FILL);
+        barArea.set_x_expand(true);
+
+        // Both layers fill the area, so neither needs an alignment the bin
+        // layout would ignore.
+        let track = new St.Widget({
+            style_class: BAR_TRACK_STYLE,
+            reactive: false,
+        });
+        track.set_x_align(Clutter.ActorAlign.FILL);
+        track.set_y_align(Clutter.ActorAlign.FILL);
+        track.set_x_expand(true);
+        track.set_y_expand(true);
+        track.visible = false;
+        barArea.add_child(track);
+        tile._ocBarTrack = track;
+
+        let bar = new St.Widget({
+            style_class: BAR_STYLE,
+            reactive: false,
+        });
+        bar.set_x_align(Clutter.ActorAlign.FILL);
+        bar.set_y_align(Clutter.ActorAlign.FILL);
+        bar.set_x_expand(true);
+        bar.set_y_expand(true);
+        bar.visible = false;
+        barArea.add_child(bar);
+        tile._ocBar = bar;
+
+        let column = new St.BoxLayout({
+            style_class: "opencode-agents-tile-column",
+            vertical: true,
+            reactive: false,
+        });
+        column.set_x_align(Clutter.ActorAlign.FILL);
+        column.set_y_align(Clutter.ActorAlign.FILL);
+        column.set_x_expand(true);
+        column.set_y_expand(true);
+        column.add_child(barArea);
+        tile.add_child(column);
+        tile._ocColumn = column;
+
         let row = new St.BoxLayout({
             style_class: "opencode-agents-tile-content",
             reactive: false,
@@ -575,15 +641,8 @@ class OpencodeAgentsApplet extends Applet.Applet {
         row.set_y_align(Clutter.ActorAlign.FILL);
         row.set_x_expand(true);
         row.set_y_expand(true);
-        tile.add_child(row);
+        column.add_child(row);
         tile._ocRow = row;
-
-        let dot = new St.Widget({ style_class: DOT_STYLE });
-        dot.set_size(this.dotSize, this.dotSize);
-        dot.set_x_align(Clutter.ActorAlign.CENTER);
-        dot.set_y_align(Clutter.ActorAlign.CENTER);
-        row.add_child(dot);
-        tile._ocDot = dot;
 
         let text = new St.BoxLayout({
             style_class: "opencode-agents-tile-text",
@@ -601,7 +660,7 @@ class OpencodeAgentsApplet extends Applet.Applet {
         tile._ocCooling = false;
         tile._ocCoolId = 0;
 
-        // Clicking a tile acknowledges its finished agent (the green dot) and
+        // Clicking a tile acknowledges its finished agent (the green fill) and
         // opens the menu, so the user can act on the session.
         tile.connect("button-release-event", () => {
             this._acknowledge(id);
@@ -637,17 +696,11 @@ class OpencodeAgentsApplet extends Applet.Applet {
         if (this._cooling[id]) {
             // The tile is holding its place while its fill retracts: keep the
             // text it had when the fill ended (the session is already forgotten)
-            // and let the cooldown own the dot's colour.
+            // and let the cooldown own the fill's colour.
             this._paintTile(actor, state);
             return;
         }
         let session = this._known[id] || null;
-
-        // While a fill retracts, the cooldown owns the dot's colour; the next
-        // ordinary paint restores it when the fill is gone.
-        if (!actor._ocCooling) {
-            this._paintDot(actor._ocDot, state);
-        }
 
         let text = actor._ocText;
         if (!text) {
@@ -691,16 +744,33 @@ class OpencodeAgentsApplet extends Applet.Applet {
         }
     }
 
-    // The status dot: the studio's colour, plus the pulse for a working agent.
-    _paintDot(dot, state) {
-        if (!dot) {
+    // The working bar: a dim amber track along the tile's top edge with the
+    // bright segment sweeping across it. Only a working agent shows it - a
+    // blocked or unread tile is already filled with its colour, and every other
+    // state has nothing to say about the bar. The segment's stretch comes from
+    // Easing.barSegment each frame; with the animation switched off the whole
+    // bar stays lit, the steady counterpart of the old steady dot.
+    _paintBar(tile, state) {
+        let track = tile._ocBarTrack;
+        let bar = tile._ocBar;
+        if (!track || !bar) {
             return;
         }
-        // On a filled tile the dot is the same colour as the fill, so it turns
-        // into the fill's ink instead and stays a visible bullet.
-        let colour = State.fills(state) ? State.ink() : State.color(state);
-        dot.set_style("background-color: " + colour + "; border-radius: " + (this.dotSize / 2) + "px;");
-        dot.opacity = 255;
+        // A fill owns the tile while it is on or retracting; the bar is the
+        // working tile's own tell, so it waits until the tile is plain again.
+        let working = state === "working" && !(tile._ocFill && tile._ocFill.visible);
+        track.visible = working;
+        bar.visible = working;
+        if (!working) {
+            bar.remove_clip();
+            return;
+        }
+        let colour = State.color("working");
+        track.set_style("background-color: " + State.alpha(colour, BAR_TRACK_ALPHA) + ";");
+        bar.set_style("background-color: " + State.alpha(colour, BAR_SEGMENT_ALPHA) + ";");
+        if (!this.animateTiles) {
+            bar.remove_clip();
+        }
     }
 
     // A tile that waits for a human (red) or whose answer nobody has read yet
@@ -715,7 +785,6 @@ class OpencodeAgentsApplet extends Applet.Applet {
         let fill = tile._ocFill;
         if (fill) {
             if (filled) {
-                let wasCooling = tile._ocCooling;
                 this._stopCooling(tile);
                 // A fill that came back is on the row's own list again, so the
                 // row no longer has to hold the tile in place.
@@ -725,23 +794,21 @@ class OpencodeAgentsApplet extends Applet.Applet {
                 fill.set_style("background-color: " + State.color(state) + ";");
                 fill.remove_clip();
                 fill.visible = true;
-                // A fill that came back owns the dot again, which the cooldown
-                // had been easing towards the state colour.
-                if (wasCooling) {
-                    this._paintDot(tile._ocDot, state);
-                }
             } else if (tile._ocCooling) {
                 // the cooldown owns the fill until it finishes
             } else if (tile._ocFilled && this.animateTiles) {
-                this._coolTile(tile, state);
+                this._coolTile(tile);
             } else {
                 fill.visible = false;
             }
         }
         tile._ocFilled = filled;
+        // The bar follows the fill's state, so it is painted after it: a tile
+        // that just filled must not leave a working bar over the colour.
+        this._paintBar(tile, state);
         let text = tile._ocText;
         if (!text || tile._ocCooling) {
-            // while a fill retracts, the cooldown owns the text and dot colours
+            // while a fill retracts, the cooldown owns the text colours
             return;
         }
         let ink = filled ? "color: " + State.ink() + ";" : "";
@@ -760,7 +827,7 @@ class OpencodeAgentsApplet extends Applet.Applet {
     // gets narrower until the tile is its old self again. The fill layer is
     // clipped rather than the tile, so the text stays readable on the uncovered
     // side.
-    _coolTile(tile, state) {
+    _coolTile(tile) {
         let fill = tile._ocFill;
         if (!fill) {
             return;
@@ -768,10 +835,7 @@ class OpencodeAgentsApplet extends Applet.Applet {
         this._stopCooling(tile);
         let duration = COOL_MS;
         let target = this._themeTextHex();
-        let dotColour = State.color(state);
-        let dotSize = this.dotSize;
         let lines = tile._ocText ? tile._ocText.get_children() : [];
-        let dot = tile._ocDot;
         let started = GLib.get_monotonic_time() / 1000;
         let self = this;
         let id = 0;
@@ -792,10 +856,6 @@ class OpencodeAgentsApplet extends Applet.Applet {
                 for (let i = 0; i < lines.length; i++) {
                     lines[i].set_style("color: " + ink + ";");
                 }
-                if (dot) {
-                    dot.set_style("background-color: " + State.mix(State.ink(), dotColour, p) +
-                        "; border-radius: " + (dotSize / 2) + "px;");
-                }
             } catch (e) {
                 // The actor went away underneath us (applet removed, a rebuild),
                 // or a lib module is stale after a reload. Either way the fill
@@ -806,10 +866,6 @@ class OpencodeAgentsApplet extends Applet.Applet {
                     fill.visible = false;
                     for (let i = 0; i < lines.length; i++) {
                         lines[i].set_style("");
-                    }
-                    if (dot) {
-                        dot.set_style("background-color: " + dotColour +
-                            "; border-radius: " + (dotSize / 2) + "px;");
                     }
                 } catch (ignored) {
                     // the actor is gone with the applet
@@ -831,10 +887,6 @@ class OpencodeAgentsApplet extends Applet.Applet {
                     fill.visible = false;
                     for (let i = 0; i < lines.length; i++) {
                         lines[i].set_style("");
-                    }
-                    if (dot) {
-                        dot.set_style("background-color: " + dotColour +
-                            "; border-radius: " + (dotSize / 2) + "px;");
                     }
                 } catch (e) {
                     // the actor went away underneath us
@@ -939,12 +991,13 @@ class OpencodeAgentsApplet extends Applet.Applet {
         return "#e1e1e1";
     }
 
-    // ---- the working pulse ---------------------------------------------
+    // ---- the working bar sweep -----------------------------------------
 
-    // One timer drives every working dot, matching the studio's pulsing
-    // "working" dot. It runs only while at least one agent works, and only
-    // with the animation setting on; otherwise the dots stay solid.
-    _syncPulse() {
+    // One timer drives the bar of every working tile, the indeterminate progress
+    // bar that stands in for the studio's pulsing "working" dot. It runs only
+    // while at least one agent works, and only with the animation setting on;
+    // otherwise each bar stays lit across the whole tile.
+    _syncBar() {
         let working = false;
         for (let id in this._tiles) {
             if (this._states[id] === "working") {
@@ -953,34 +1006,52 @@ class OpencodeAgentsApplet extends Applet.Applet {
             }
         }
         if (working && this.animateTiles) {
-            if (!this._pulseTimer) {
+            if (!this._barTimer) {
                 let started = GLib.get_monotonic_time() / 1000;
-                this._pulseTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, PULSE_FRAME_MS, () => {
+                this._barTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, FRAME_MS, () => {
                     let elapsed = GLib.get_monotonic_time() / 1000 - started;
-                    this._paintPulse(elapsed);
+                    this._paintBarFrame(elapsed);
                     return GLib.SOURCE_CONTINUE;
                 });
-                this._paintPulse(0);
+                this._paintBarFrame(0);
             }
             return;
         }
-        this._stopPulse();
+        this._stopBar();
     }
 
-    _stopPulse() {
-        if (this._pulseTimer) {
-            GLib.source_remove(this._pulseTimer);
-            this._pulseTimer = 0;
+    // Stops the sweep and repaints every bar, so a tile whose session is no
+    // longer working loses it and an unanimated one keeps a full, steady bar.
+    _stopBar() {
+        if (this._barTimer) {
+            GLib.source_remove(this._barTimer);
+            this._barTimer = 0;
         }
-        this._paintPulse(0);
+        for (let id in this._tiles) {
+            this._paintBar(this._tiles[id], this._states[id]);
+        }
     }
 
-    _paintPulse(elapsed) {
-        let opacity = Easing.pulseOpacity(elapsed);
+    // Reveals the segment the bar is at this instant by clipping the bright
+    // layer to it - a frame's work is a rectangle, not a reallocation, so the
+    // sweep can never disturb the row's layout.
+    _paintBarFrame(elapsed) {
         for (let id in this._tiles) {
             let tile = this._tiles[id];
-            if (tile && tile._ocDot && this._states[id] === "working") {
-                tile._ocDot.opacity = opacity;
+            let bar = tile ? tile._ocBar : null;
+            if (!bar || !bar.visible || this._states[id] !== "working") {
+                continue;
+            }
+            try {
+                let part = Easing.barSegment(elapsed, bar.get_width());
+                if (part.width <= 0) {
+                    bar.set_clip(0, 0, 0, 0);
+                } else {
+                    bar.set_clip(Math.round(part.x), 0, Math.round(part.width),
+                        bar.get_height());
+                }
+            } catch (e) {
+                // the actor went away underneath us; the next render tidies up
             }
         }
     }
@@ -989,7 +1060,7 @@ class OpencodeAgentsApplet extends Applet.Applet {
 
     // Only a finished (green) agent can be acknowledged; clicking a working or
     // blocked tile just opens the menu. Marking a live session would otherwise
-    // swallow the green dot the moment it finishes.
+    // swallow the green fill the moment it finishes.
     _acknowledge(id) {
         if (!id || Tiles.isMarker(id) || this._states[id] !== "done") {
             return;
@@ -1160,7 +1231,7 @@ class OpencodeAgentsApplet extends Applet.Applet {
     }
 
     _slideDistance() {
-        return Math.max(24, this.dotSize + 12);
+        return SLIDE_DISTANCE;
     }
 
     _tileSpacing() {
@@ -1253,7 +1324,7 @@ class OpencodeAgentsApplet extends Applet.Applet {
         for (let i = 0; i < model.servers.length; i++) {
             let server = model.servers[i];
             // The quiet ones (a finish that has been read) are in the model so
-            // the dots can tell read from unread; they are not worth a row.
+            // the states can tell read from unread; they are not worth a row.
             let sessions = model.sessions.filter((session) => session.serverId === server.id && isWorthListing(session));
             if (sessions.length === 0 && !server.error && !this.menuShowIdleServers) {
                 continue;
@@ -1428,9 +1499,9 @@ class OpencodeAgentsApplet extends Applet.Applet {
             GLib.source_remove(this._animations[i]);
         }
         this._animations = [];
-        if (this._pulseTimer) {
-            GLib.source_remove(this._pulseTimer);
-            this._pulseTimer = 0;
+        if (this._barTimer) {
+            GLib.source_remove(this._barTimer);
+            this._barTimer = 0;
         }
         if (this._monitor) {
             this._monitor.stop();

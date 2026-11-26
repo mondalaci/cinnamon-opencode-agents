@@ -1,43 +1,44 @@
 # OpenCode Agents - Cinnamon applet
 
 Shows, in the Cinnamon panel, which opencode v2 agents are working right now:
-one tile per live conversation, side by side, with a status dot at the head of
-each and two lines of text — the project on top, the conversation subject
-below.
+one tile per live conversation, side by side, with two lines of text — the
+project on top, the conversation subject below — and a thin progress bar along
+the tile's top edge that sweeps while its agent works.
 
 ```
-● uhk.io          ● uhk.io          ● agent           +2
-  Fix the widget…   Ask which file…   Refactor the …
+▔▔▔▔▔▔▔▔▔▔▔▔   ▔▔▔▔▔▔▔▔▔▔▔▔   ▔▔▔▔▔▔▔▔▔   +2
+uhk.io            uhk.io            agent
+Fix the widget…   Ask which file…   Refactor the …
 ```
 
 <p align="center">
   <img src="docs/panel.png" alt="the applet in the panel" width="520">
 </p>
 
-- **Status dot** - the state of the conversation, with the vocabulary and the
-  colours of the [opencode project
+- **The tile carries the state**, with the vocabulary and the colours of the
+  [opencode project
   studio](https://github.com/mondalaci/opencode-projects-studio) it borrows
   them from:
 
-  | Dot | State | Meaning |
+  | State | Meaning | The tile |
   | --- | --- | --- |
-  | 🔴 red | `blocked` | the agent waits for you: a permission request or a question |
-  | 🟠 amber | `working` | a turn is running, and the dot pulses while it does |
-  | 🟢 green | `done` | the turn finished and nobody has looked at it yet |
-  | ⚪ grey | `idle` | nothing to do (only the idle icon uses it) |
+  | `blocked` | the agent waits for you: a permission request or a question | fills red |
+  | `working` | a turn is running | a thin amber bar sweeps along its top edge |
+  | `done` | the turn finished and nobody has looked at it yet | fills green |
+  | `idle` | nothing to do | no tile (only the idle icon uses the grey) |
 
 - **A tile that needs a human fills with its colour** - a conversation waiting
   for you (a permission request, or a question offering its choices) is painted
   red across the whole tile, and one whose turn finished and that nobody has
   looked at yet is painted green, so both are visible from across the room. The
   amber working tiles keep the panel background: they say all there is to say
-  with their pulsing dot.
+  with their thin sweeping bar.
 
 - **Project and subject** - the top line is the project the conversation lives
   in (its registered name, else the folder name), the bottom line the
   conversation's subject. A tile widens into the free panel space to show them
   in full, and only ellipsizes a line when the row as a whole runs out of room.
-- **Acknowledging** - a finished agent keeps its green dot until somebody
+- **Acknowledging** - a finished agent keeps its green tile until somebody
   looks at it. Clicking its tile (or *Mark finished agents as seen* in the menu)
   marks it viewed **on the server**, so the opencode project studio drops its own
   green dot for the same conversation and every other client agrees - see *Seen
@@ -49,8 +50,9 @@ below.
   needed - the block was answered, or the finish was read - sweeps away to the
   right over six seconds while its tile stays in place, exactly as the studio's
   sidebar retracts the same fill; only then does the tile leave. While any agent
-  works its dot breathes, exactly as the studio's working dot does. Turn it off
-  with *Animate new and finished agents*.
+  works a thin amber bar sweeps along the top of its tile, loop after loop,
+  where the studio's working dot pulses. Turn it off with *Animate new and
+  finished agents* for instant changes and a steady bar.
 - **Idle** - a dimmed robot icon, or nothing at all if you prefer
   (*Hide the panel icon when no agent is working*).
 - **Never any desktop notification** - the applet only draws in the panel. The
@@ -119,7 +121,7 @@ cannot leave them behind.
 | --- | --- |
 | `GET /api/project?archived=true` | project names and whether a folder is gone |
 | `GET /api/session/active` | the sessions a turn is running for right now |
-| `GET /api/session?limit=200&parentID=null&order=desc` | the newest conversation of every project - read or not, so a green dot can never be invented for one |
+| `GET /api/session?limit=200&parentID=null&order=desc` | the newest conversation of every project - read or not, so a green tile can never be invented for one |
 | `GET /api/debug/location` | the project directories the server has materialized |
 | `GET /api/permission/request?location[directory]=<dir>` | who waits for approval |
 | `GET /api/form?location[directory]=<dir>` | who waits for an answer |
@@ -178,7 +180,7 @@ set in its own storage), so an applet-only rule could never match.
 | --- | --- |
 | General | poll interval (2 s), session details refresh (30 s), projects checked for pending requests (12) |
 | Servers | service file on/off + path, `/proc` scan on/off, additional servers |
-| Panel | status dot size (12), show the project, show the subject, agents shown side by side (5), animate new/finished agents, hide when idle |
+| Panel | show the project, show the subject, agents shown side by side (5), animate new/finished agents and the bar sweep, hide when idle |
 | Menu | session title length, show model, show directory, show cost/tokens, list idle servers |
 | Actions | session action: copy the session ID, run a command (`{id} {title} {project} {dir} {agent} {model} {status}`), or nothing |
 
@@ -193,10 +195,10 @@ opencode-agents@laci/     the applet (installed as one directory)
   lib/discovery.js        server discovery: service file, config, /proc scan
   lib/client.js           async HTTP client for the opencode v2 API
   lib/monitor.js          poll loop, active/blocked sweep, per-server merge
-  lib/state.js            the dot states, colours and their transitions (pure)
+  lib/state.js            the tile states, colours and their transitions (pure)
   lib/format.js           tooltip/menu formatting (pure functions)
   lib/tiles.js            the tile row diff and width fit (pure)
-  lib/easing.js           slide curves and the working-dot pulse (pure)
+  lib/easing.js           slide curves and the working bar sweep (pure)
   lib/agenticon.js        resolves the idle icon path (pure, testable)
   icons/lucide-bot.svg    the idle icon (Lucide bot, ISC), tinted to the panel tone
   settings-schema.json    settings UI definition
@@ -221,12 +223,12 @@ The suite starts three mock servers (one password-less, one that requires auth
 on an OS-assigned `--port 0` port, one announced by a service file) and covers:
 
 - panel/menu formatting helpers (titles, projects, durations, cost, tooltips)
-- the dot states: the colours, the `blocked > working > done > idle`
+- the tile states: the colours, the `blocked > working > done > idle`
   precedence, the "a session that just stopped is done" transition, a finish the
   monitor reports on the first poll, and acknowledgement
 - the tile row diff: slides in and out, reordering, the overflow tile, the idle
   tile, and the width fit that hands a short tile's slack to a longer one
-- the easing curves and the working-dot pulse
+- the easing curves and the working bar sweep
 - the idle icon: that the file exists, is an SVG, carries its licence note and
   is tinted, that its paths cannot escape the applet directory, that the old
   inverted twin is gone, and that the settings offer no icon chooser
@@ -261,16 +263,25 @@ on an OS-assigned `--port 0` port, one announced by a service file) and covers:
   Edited `lib/*.js` modules stay cached in the Cinnamon process, so those need a
   Cinnamon restart (`org.Cinnamon.RestartCinnamon true`) — a fresh start always
   works.
-- The tile animations and the dot pulse are driven by the applet's own frame
-  loop (`lib/easing.js` + a `GLib.timeout_add`) rather than by Clutter easing.
-  Cinnamon applies an actor's final value immediately when desktop animations
-  are switched off (`St.Settings.animations_enabled`, false on plenty of
-  installs), which would silently turn every `ease()` into a jump; driving the
-  pulse here keeps it visible for anyone who asked for it, and the
+- The tile animations and the working bar sweep are driven by the applet's own
+  frame loop (`lib/easing.js` + a `GLib.timeout_add`) rather than by Clutter
+  easing. Cinnamon applies an actor's final value immediately when desktop
+  animations are switched off (`St.Settings.animations_enabled`, false on plenty
+  of installs), which would silently turn every `ease()` into a jump; driving the
+  sweep here keeps it visible for anyone who asked for it, and the
   `animate-tiles` setting is the switch that matters.
-- The dot's size and colour come from the applet (`lib/state.js`), set as an
-  inline style on the dot actor, so the colour follows the session's state and
-  the size is a setting. `border-radius: 50%` gives the circle.
+- The working bar is the first row of the tile's own column: a 2px area above
+  the two text lines that holds a dim track and the brighter segment sweeping
+  across it. It cannot be a layer pinned to the bin tile - Cinnamon's bin layout
+  centres a child whatever its `y-align` says - and as a row of the column it
+  sits directly over the project line. Both colours come from `lib/state.js`:
+  the track is the working amber at 36% and the segment at 55%, close enough
+  that the motion is what catches the eye. The area is always there, empty when
+  nothing works, so a tile never changes size; `barSegment` computes the stretch
+  of the segment that is on the tile, and the applet applies it as a **clip** on
+  a full-width layer, never as a size or a position, so a frame of the sweep
+  cannot re-lay the row out. With `animate-tiles` off the bar stays lit across
+  the whole tile.
 - The tile row claims the panel space the other applets leave, because Cinnamon
   gives an applet only the width its contents ask for. `_availableRowWidth`
   reads the panel's own width and subtracts the two other boxes and the rest of
@@ -295,8 +306,8 @@ on an OS-assigned `--port 0` port, one announced by a service file) and covers:
 - Theme-node lengths (`spacing`, `padding`) come back in **device** pixels -
   multiplied by the stage scale factor, which is 2 on a HiDPI panel - while the
   applet's own settings are logical pixels. So a `spacing: 10px` rule in the
-  stylesheet measures as 20, and the dot is sized with `set_size` so it stays
-  logical.
+  stylesheet measures as 20, while the bar's height and the tile's padding come
+  straight from the stylesheet and scale with the panel.
 - `node --check <file>` validates the syntax of every JS file.
 
 ## Limitations
@@ -306,9 +317,9 @@ on an OS-assigned `--port 0` port, one announced by a service file) and covers:
   with a row of them. One *Mark finished agents as seen* publishes the view for
   all of them at once, and from then on the panel and the studio stay in step.
 - A conversation the studio has marked unread while it was running shows its
-  green dot in the panel too, but only once the studio has published it: the
+  green tile in the panel too, but only once the studio has published it: the
   panel polls, so it lags the studio by up to one interval (2 s).
-- The dots are per conversation, not per subagent: a subagent session is not a
+- The tiles are per conversation, not per subagent: a subagent session is not a
   tile of its own.
 - Only a permission request or a question counts as blocked; a session whose
   provider is being retried reads as working.
