@@ -50,7 +50,6 @@ const SEEN_ICON = "object-select-symbolic";
 const OVERFLOW_STYLE = "opencode-agents-tile-overflow";
 const BAR_STYLE = "opencode-agents-bar";
 const BAR_TRACK_STYLE = "opencode-agents-bar-track";
-const BAR_AREA_STYLE = "opencode-agents-bar-area";
 const FILL_STYLE = "opencode-agents-tile-fill";
 const IN_ANIMATION_MS = 250;
 const OUT_ANIMATION_MS = 200;
@@ -59,11 +58,19 @@ const OUT_ANIMATION_MS = 200;
 const COOL_MS = 6000;
 const FRAME_MS = 16;
 const IDLE_ICON_SIZE = 20;
-// The working bar is meant to be felt, not stared at: the track is the amber at
-// roughly a third of its strength and the sweeping segment only a little
-// stronger, so the motion is what catches the eye and the colour does not.
+// The working bar is a thin band along the tile's top edge, coloured in the
+// state's amber. It is drawn over the tile instead of taking a row of its own,
+// so it never costs the two text lines any height. It is meant to be felt, not
+// stared at: the track is the amber at roughly a third of its strength and the
+// travelling stretch only a little stronger, so the motion is what catches the
+// eye and the colour does not.
+const BAR_THICKNESS = 1;        // CSS pixels; the applet scales it for the clip
 const BAR_TRACK_ALPHA = 0.36;
 const BAR_SEGMENT_ALPHA = 0.55;
+// A clip past an actor's own bounds - the actor itself still bounds the paint,
+// so this simply means "the whole length" without measuring a tile that may not
+// have been allocated yet.
+const BAR_CLIP_END = 100000;
 // How far a tile travels when it slides in or out: a step of its own, enough to
 // read as motion without waiting for a full tile width.
 const SLIDE_DISTANCE = 24;
@@ -79,16 +86,26 @@ function isWorthListing(session) {
     return !!(session && (session.blocked || session.done || session.status === "running"));
 }
 
+// The stage scale factor: stylesheet lengths are logical pixels while actor
+// coordinates are device pixels, so a length like the bar's thickness has to be
+// multiplied by this to clip or size an actor by it.
+function stageScale() {
+    try {
+        return St.ThemeContext.get_for_stage(global.stage).scale_factor || 1;
+    } catch (e) {
+        return 1;
+    }
+}
+
+// The band's thickness in the device pixels a clip is given.
+function barThickness() {
+    return Math.max(1, Math.round(BAR_THICKNESS * stageScale()));
+}
+
 // St.Icon multiplies icon_size by the stage scale factor, while the sizes in the
 // applet's settings are plain pixels, so undo that here.
 function iconSizeFor(pixels) {
-    let scale = 1;
-    try {
-        scale = St.ThemeContext.get_for_stage(global.stage).scale_factor || 1;
-    } catch (e) {
-        scale = 1;
-    }
-    return Math.max(1, Math.round(pixels / scale));
+    return Math.max(1, Math.round(pixels / stageScale()));
 }
 
 // One 0..255 colour channel as two hex digits, for building a "#rrggbb" string
@@ -550,12 +567,12 @@ class OpencodeAgentsApplet extends Applet.Applet {
     }
 
     // One agent: the project over the conversation subject, with the working
-    // bar over the project line.
+    // bar as a thin band along the tile's top edge.
     //
-    // The tile is a bin, not a row: the fill layer sits behind the column's
-    // content. The fill has to be its own actor, because the cooldown retracts
-    // it while the text stays readable on the uncovered side - a clip on the
-    // tile itself would sweep the text away with the colour.
+    // The tile is a bin, not a row: the fill layer sits behind the row's content.
+    // The fill has to be its own actor, because the cooldown retracts it while
+    // the text stays readable on the uncovered side - a clip on the tile itself
+    // would sweep the text away with the colour.
     _sessionTile(id, entry) {
         let tile = new St.Widget({
             style_class: "opencode-agents-tile opencode-agents-tile-session",
@@ -579,23 +596,11 @@ class OpencodeAgentsApplet extends Applet.Applet {
         tile.add_child(fill);
         tile._ocFill = fill;
 
-        // The working bar: a dim track along the top edge and the bright
-        // segment that sweeps across it. It is the first row of the tile's own
-        // column, not a layer hung off the bin: a bin child cannot be pinned to
-        // the top edge (Clutter's bin layout centres it, whatever its y-align
-        // says), and the bar belongs over the project line, not between it and
-        // the subject. The area keeps its height whether or not a bar is on it,
-        // so a tile never resizes when its agent starts or stops working.
-        let barArea = new St.Widget({
-            style_class: BAR_AREA_STYLE,
-            reactive: false,
-        });
-        barArea.set_layout_manager(new Clutter.BinLayout());
-        barArea.set_x_align(Clutter.ActorAlign.FILL);
-        barArea.set_x_expand(true);
-
-        // Both layers fill the area, so neither needs an alignment the bin
-        // layout would ignore.
+        // The working bar: a thin band along the tile's top edge, with a bright
+        // stretch travelling across it. Both layers span the whole tile and are
+        // clipped to the band: a bin child cannot be pinned to an edge (the bin
+        // layout centres it, whatever its align says), and a clip costs the
+        // layout nothing, so the bar takes no height from the two text lines.
         let track = new St.Widget({
             style_class: BAR_TRACK_STYLE,
             reactive: false,
@@ -605,7 +610,7 @@ class OpencodeAgentsApplet extends Applet.Applet {
         track.set_x_expand(true);
         track.set_y_expand(true);
         track.visible = false;
-        barArea.add_child(track);
+        tile.add_child(track);
         tile._ocBarTrack = track;
 
         let bar = new St.Widget({
@@ -617,21 +622,8 @@ class OpencodeAgentsApplet extends Applet.Applet {
         bar.set_x_expand(true);
         bar.set_y_expand(true);
         bar.visible = false;
-        barArea.add_child(bar);
+        tile.add_child(bar);
         tile._ocBar = bar;
-
-        let column = new St.BoxLayout({
-            style_class: "opencode-agents-tile-column",
-            vertical: true,
-            reactive: false,
-        });
-        column.set_x_align(Clutter.ActorAlign.FILL);
-        column.set_y_align(Clutter.ActorAlign.FILL);
-        column.set_x_expand(true);
-        column.set_y_expand(true);
-        column.add_child(barArea);
-        tile.add_child(column);
-        tile._ocColumn = column;
 
         let row = new St.BoxLayout({
             style_class: "opencode-agents-tile-content",
@@ -641,7 +633,7 @@ class OpencodeAgentsApplet extends Applet.Applet {
         row.set_y_align(Clutter.ActorAlign.FILL);
         row.set_x_expand(true);
         row.set_y_expand(true);
-        column.add_child(row);
+        tile.add_child(row);
         tile._ocRow = row;
 
         let text = new St.BoxLayout({
@@ -744,12 +736,12 @@ class OpencodeAgentsApplet extends Applet.Applet {
         }
     }
 
-    // The working bar: a dim amber track along the tile's top edge with the
-    // bright segment sweeping across it. Only a working agent shows it - a
+    // The working bar: a dim amber band along the tile's top edge, with the
+    // bright stretch travelling across it. Only a working agent shows it - a
     // blocked or unread tile is already filled with its colour, and every other
-    // state has nothing to say about the bar. The segment's stretch comes from
-    // Easing.barSegment each frame; with the animation switched off the whole
-    // bar stays lit, the steady counterpart of the old steady dot.
+    // state has nothing to say about the bar. The stretch comes from
+    // Easing.barSweep each frame; with the animation switched off the whole bar
+    // stays lit, the steady counterpart of the old steady dot.
     _paintBar(tile, state) {
         let track = tile._ocBarTrack;
         let bar = tile._ocBar;
@@ -762,14 +754,18 @@ class OpencodeAgentsApplet extends Applet.Applet {
         track.visible = working;
         bar.visible = working;
         if (!working) {
+            track.remove_clip();
             bar.remove_clip();
             return;
         }
         let colour = State.color("working");
         track.set_style("background-color: " + State.alpha(colour, BAR_TRACK_ALPHA) + ";");
         bar.set_style("background-color: " + State.alpha(colour, BAR_SEGMENT_ALPHA) + ";");
+        // Both layers span the tile; the clip narrows them to the band, which
+        // is the top few pixels of the tile - over the content's top padding.
+        track.set_clip(0, 0, BAR_CLIP_END, barThickness());
         if (!this.animateTiles) {
-            bar.remove_clip();
+            bar.set_clip(0, 0, BAR_CLIP_END, barThickness());
         }
     }
 
@@ -1032,10 +1028,11 @@ class OpencodeAgentsApplet extends Applet.Applet {
         }
     }
 
-    // Reveals the segment the bar is at this instant by clipping the bright
-    // layer to it - a frame's work is a rectangle, not a reallocation, so the
-    // sweep can never disturb the row's layout.
+    // Reveals the stretch of the sweep the bar is at this instant by clipping the
+    // bright layer to it - a frame's work is a rectangle, not a reallocation, so
+    // the sweep can never disturb the row's layout.
     _paintBarFrame(elapsed) {
+        let band = barThickness();
         for (let id in this._tiles) {
             let tile = this._tiles[id];
             let bar = tile ? tile._ocBar : null;
@@ -1043,13 +1040,10 @@ class OpencodeAgentsApplet extends Applet.Applet {
                 continue;
             }
             try {
-                let part = Easing.barSegment(elapsed, bar.get_width());
-                if (part.width <= 0) {
-                    bar.set_clip(0, 0, 0, 0);
-                } else {
-                    bar.set_clip(Math.round(part.x), 0, Math.round(part.width),
-                        bar.get_height());
-                }
+                // The band runs across the tile, so the sweep travels along its
+                // width and the clip keeps to its height.
+                let part = Easing.barSweep(elapsed, bar.get_width());
+                bar.set_clip(Math.round(part.start), 0, Math.round(part.length), band);
             } catch (e) {
                 // the actor went away underneath us; the next render tidies up
             }

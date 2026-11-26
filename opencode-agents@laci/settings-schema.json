@@ -264,7 +264,7 @@
         "type": "switch",
         "default": true,
         "description": "Animate new and finished agents",
-        "tooltip": "A session that starts slides in from the left; one that leaves slides out. While an agent works, a thin bar sweeps across the top of its tile. Turn off for instant changes and a steady bar."
+        "tooltip": "A session that starts slides in from the left; one that leaves slides out. While an agent works, a thin bar sweeps along the top edge of its tile. Turn off for instant changes and a steady bar."
     },
     "tiles-info": {
         "type": "label",

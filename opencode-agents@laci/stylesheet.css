@@ -13,38 +13,27 @@
     padding: 1px 5px;
 }
 
-/* A session tile is a bin: the fill layer behind, and the column on top of it,
-   which carries the bar's row over the content row. The padding belongs to the
-   content, so the fill covers the whole pill, corners included - padding on the
-   tile would leave a rim of panel around it. */
+/* A session tile is a bin: the fill layer behind and the content row on top.
+   The padding belongs to the content, so the fill covers the whole pill, corners
+   included - padding on the tile would leave a rim of panel around it. */
 .opencode-agents-tile-session {
     padding: 0px;
 }
 
-/* The tile's column: the bar's row above, the content row below, and no gap
-   between them - the content's own padding is the gap. */
-.opencode-agents-tile-column {
-    spacing: 0px;
-}
-
+/* The top padding is the working bar's own row; the bar overlays it instead of
+   taking height of its own, so the two lines keep the room the panel gives
+   them. */
 .opencode-agents-tile-content {
     spacing: 6px;
     padding: 1px 5px;
 }
 
-/* The bar's 2px row. It keeps its height whether or not a bar is drawn on it,
-   so a tile that starts or stops working never changes size; the applet hides
-   the two layers inside instead. */
-.opencode-agents-bar-area {
-    height: 2px;
-}
-
-/* The working bar: a dim track along the tile's top edge, and the slightly
-   brighter segment sweeping across it. Both carry their colour from the applet
-   (it is the state's), and both fill the 2px area. */
+/* The working bar's two layers span the whole tile and are clipped to the band
+   by the applet, which also sets their colour (it is the state's), so there is
+   nothing to size here. */
 .opencode-agents-bar-track,
 .opencode-agents-bar {
-    border-radius: 1px;
+    background-color: transparent;
 }
 
 /* A blocked tile (red) and an unread finish (green) fill with the state colour.
@@ -64,18 +53,21 @@
 }
 
 /* The project line is quieter than the conversation subject, but the same
-   size: the two lines read as one block. */
+   size: the two lines read as one block. 0.83em is what lets two lines, their
+   padding and a pixel of margin above and below fit the panel's 30 logical
+   pixels - at 0.95em the tile is taller than the panel and its fill spills
+   over the edge. */
 .opencode-agents-tile-project {
-    font-size: 0.95em;
+    font-size: 0.83em;
     opacity: 0.75;
 }
 
 .opencode-agents-tile-subject {
-    font-size: 0.95em;
+    font-size: 0.83em;
 }
 
 .opencode-agents-tile-overflow {
-    font-size: 0.95em;
+    font-size: 0.83em;
     opacity: 0.8;
 }
 

@@ -347,30 +347,30 @@ function testEasing() {
     equal("easing: interpolate", Easing.value(-48, 0, 0.5), -24);
     equal("easing: interpolate upwards", Easing.value(0, 255, 0.25), 63.75);
 
-    // the working bar sweeps: a segment enters from behind the left edge,
-    // crosses the tile and leaves behind the right one, then starts again
-    let half = Easing.barSegment(Easing.BAR_PERIOD_MS / 2, 100);
-    equal("easing: the segment is centred half way", Math.round(half.x), 34);
-    equal("easing: the segment is a share of the width", Math.round(half.width), 32);
-    equal("easing: the sweep starts off the left edge", Math.round(Easing.barSegment(0, 100).width), 0);
-    equal("easing: the sweep comes back", Math.round(Easing.barSegment(Easing.BAR_PERIOD_MS, 100).width), 0);
-    let entering = Easing.barSegment(Easing.BAR_PERIOD_MS * 0.1, 100);
-    equal("easing: an entering segment is cut at the left edge", Math.round(entering.x), 0);
-    check("easing: the entering segment is partial",
-        entering.width > 0 && entering.width < half.width, String(entering.width));
-    let leaving = Easing.barSegment(Easing.BAR_PERIOD_MS * 0.9, 100);
-    check("easing: a leaving segment is cut at the right edge",
-        leaving.x + leaving.width <= 100 && leaving.width < half.width,
-        leaving.x + "+" + leaving.width);
-    // A wide tile gets a longer segment, a narrow one a shorter, and a tile
-    // with no width at all has nothing to draw.
-    equal("easing: the segment scales with the tile",
-        Math.round(Easing.barSegment(Easing.BAR_PERIOD_MS / 2, 50).width), 16);
-    equal("easing: a tile with no width", Easing.barSegment(0, 0).width, 0);
-    check("easing: the segment never leaves the tile", (function () {
+    // the working bar sweeps: a stretch enters from behind one end, crosses the
+    // bar and leaves behind the other, then starts again
+    let half = Easing.barSweep(Easing.BAR_PERIOD_MS / 2, 100);
+    equal("easing: the stretch is centred half way", Math.round(half.start), 34);
+    equal("easing: the stretch is a share of the length", Math.round(half.length), 32);
+    equal("easing: the sweep starts off the start", Math.round(Easing.barSweep(0, 100).length), 0);
+    equal("easing: the sweep comes back", Math.round(Easing.barSweep(Easing.BAR_PERIOD_MS, 100).length), 0);
+    let entering = Easing.barSweep(Easing.BAR_PERIOD_MS * 0.1, 100);
+    equal("easing: an entering stretch is cut at the start", Math.round(entering.start), 0);
+    check("easing: the entering stretch is partial",
+        entering.length > 0 && entering.length < half.length, String(entering.length));
+    let leaving = Easing.barSweep(Easing.BAR_PERIOD_MS * 0.9, 100);
+    check("easing: a leaving stretch is cut at the end",
+        leaving.start + leaving.length <= 100 && leaving.length < half.length,
+        leaving.start + "+" + leaving.length);
+    // A long bar gets a longer stretch, a short one a shorter, and a bar with no
+    // length at all has nothing to draw.
+    equal("easing: the stretch scales with the bar",
+        Math.round(Easing.barSweep(Easing.BAR_PERIOD_MS / 2, 50).length), 16);
+    equal("easing: a bar with no length", Easing.barSweep(0, 0).length, 0);
+    check("easing: the stretch never leaves the bar", (function () {
         for (let ms = 0; ms <= Easing.BAR_PERIOD_MS; ms += 20) {
-            let part = Easing.barSegment(ms, 100);
-            if (part.x < 0 || part.width < 0 || part.x + part.width > 100.0001) {
+            let part = Easing.barSweep(ms, 100);
+            if (part.start < 0 || part.length < 0 || part.start + part.length > 100.0001) {
                 return false;
             }
         }
@@ -451,7 +451,11 @@ function testLookAndFeel() {
         !!applet && applet.indexOf("_paintTile") >= 0 && applet.indexOf("State.fills") >= 0 &&
         !!css && css.indexOf(".opencode-agents-tile-fill") >= 0, "");
     check("look: the applet sweeps the working bar",
-        !!applet && applet.indexOf("barSegment") >= 0 && applet.indexOf("_syncBar") >= 0, "");
+        !!applet && applet.indexOf("barSweep") >= 0 && applet.indexOf("_syncBar") >= 0, "");
+    // The bar overlays the tile. A row of its own would push two lines that
+    // already fill the panel over its edge.
+    check("look: the working bar costs no layout height",
+        !!applet && applet.indexOf("bar-area") < 0 && !!css && css.indexOf("bar-area") < 0, "");
     check("look: the applet keeps two lines per tile", !!applet && applet.indexOf("opencode-agents-tile-project") >= 0 &&
         applet.indexOf("opencode-agents-tile-subject") >= 0, "");
     check("look: clicking a tile acknowledges it", !!applet && applet.indexOf("_acknowledge") >= 0, "");

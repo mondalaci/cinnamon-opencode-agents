@@ -6,9 +6,9 @@ project on top, the conversation subject below — and a thin progress bar along
 the tile's top edge that sweeps while its agent works.
 
 ```
-▔▔▔▔▔▔▔▔▔▔▔▔   ▔▔▔▔▔▔▔▔▔▔▔▔   ▔▔▔▔▔▔▔▔▔   +2
-uhk.io            uhk.io            agent
-Fix the widget…   Ask which file…   Refactor the …
+▔▔▔▔▔▔▔▔▔▔▔▔▔  ▔▔▔▔▔▔▔▔▔▔▔▔▔  ▔▔▔▔▔▔▔▔▔▔▔  +2
+uhk.io          uhk.io          agent
+Fix the widget… Ask which file… Refactor the …
 ```
 
 <p align="center">
@@ -270,18 +270,21 @@ on an OS-assigned `--port 0` port, one announced by a service file) and covers:
   of installs), which would silently turn every `ease()` into a jump; driving the
   sweep here keeps it visible for anyone who asked for it, and the
   `animate-tiles` setting is the switch that matters.
-- The working bar is the first row of the tile's own column: a 2px area above
-  the two text lines that holds a dim track and the brighter segment sweeping
-  across it. It cannot be a layer pinned to the bin tile - Cinnamon's bin layout
-  centres a child whatever its `y-align` says - and as a row of the column it
-  sits directly over the project line. Both colours come from `lib/state.js`:
-  the track is the working amber at 36% and the segment at 55%, close enough
-  that the motion is what catches the eye. The area is always there, empty when
-  nothing works, so a tile never changes size; `barSegment` computes the stretch
-  of the segment that is on the tile, and the applet applies it as a **clip** on
-  a full-width layer, never as a size or a position, so a frame of the sweep
-  cannot re-lay the row out. With `animate-tiles` off the bar stays lit across
-  the whole tile.
+- The working bar is a thin band along the tile's top edge and takes no layout
+  room at all: both of its layers span the whole tile and are **clipped** to the
+  band, so the band overlays the content's top padding instead of adding a row
+  of its own (two text lines already fill a 30px panel, and a row of its own is
+  what used to push the fill over the panel's edge). It cannot be a layer pinned
+  to an edge either - Cinnamon's bin layout centres a bin child whatever its
+  `x-align` or `y-align` says - so the bar is the top few pixels of a full-tile
+  layer and the sweep is a horizontal clip within it. Both colours come from
+  `lib/state.js`: the track is the working amber at 36% and the travelling
+  stretch at 55%, close enough that the motion is what catches the eye.
+  `barSweep` computes the stretch that is on the bar, and the applet applies it
+  as a clip, never as a size or a position, so a frame of the sweep cannot
+  re-lay the row out. The thickness is a logical-pixel constant scaled by the
+  stage factor, because actor coordinates are device pixels. With
+  `animate-tiles` off the bar stays lit across the whole tile.
 - The tile row claims the panel space the other applets leave, because Cinnamon
   gives an applet only the width its contents ask for. `_availableRowWidth`
   reads the panel's own width and subtracts the two other boxes and the rest of
@@ -303,11 +306,16 @@ on an OS-assigned `--port 0` port, one announced by a service file) and covers:
   way out, so an interrupted run cannot leave the applet pointed at a dead mock.
   Never inject a model into a live applet: the panel keeps showing it until the
   applet is reloaded.
+- The two lines are set at `0.83em` because that is what fits: a 30px panel is
+  60 device pixels here, two lines at `0.95em` are 58, and the 1px padding and
+  the fill's margin have to come out of the same budget. Raising the panel's
+  height setting is the alternative - it buys back a bigger font at the price of
+  a taller panel for every applet.
 - Theme-node lengths (`spacing`, `padding`) come back in **device** pixels -
   multiplied by the stage scale factor, which is 2 on a HiDPI panel - while the
   applet's own settings are logical pixels. So a `spacing: 10px` rule in the
-  stylesheet measures as 20, while the bar's height and the tile's padding come
-  straight from the stylesheet and scale with the panel.
+  stylesheet measures as 20, and the bar's thickness is multiplied by the same
+  factor before it is used as a clip, so the band stays thin on a HiDPI panel.
 - `node --check <file>` validates the syntax of every JS file.
 
 ## Limitations
