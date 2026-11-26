@@ -735,10 +735,12 @@ class OpencodeAgentsApplet extends Applet.Applet {
             return;
         }
         let state = entry.state;
-        if (this._cooling[id]) {
+        if (this._cooling[id] && state !== "working") {
             // The tile is holding its place while its fill retracts: keep the
             // text it had when the fill ended (the session is already forgotten)
-            // and let the cooldown own the fill's colour.
+            // and let the cooldown own the fill's colour. A conversation that
+            // starts working again is no longer forgotten, so it falls through
+            // and gets its current lines and its amber bar.
             this._paintTile(actor, state);
             return;
         }
@@ -808,7 +810,9 @@ class OpencodeAgentsApplet extends Applet.Applet {
             return;
         }
         // A fill owns the tile while it is on or retracting; the bar is the
-        // working tile's own tell, so it waits until the tile is plain again.
+        // working tile's own tell, so it waits until the tile is plain again -
+        // and a conversation that goes back to work clears its fill at once
+        // (see _paintTile), so the bar never waits on a retraction.
         let working = state === "working" && !(tile._ocFill && tile._ocFill.visible);
         track.visible = working;
         bar.visible = working;
@@ -834,7 +838,10 @@ class OpencodeAgentsApplet extends Applet.Applet {
     // panel's own text is light and would vanish on it. Every other state clears
     // all of that, so a tile that starts working, is acknowledged or drops to
     // idle goes back to the panel background - except that a fill which has just
-    // ended retracts instead of vanishing (see _coolTile).
+    // ended retracts instead of vanishing (see _coolTile). A conversation that
+    // goes straight from a block back to work is the exception to the
+    // exception: the amber bar is the display now, so the fill goes at once
+    // rather than sweeping red or green over a turn that is already running.
     _paintTile(tile, state) {
         let filled = State.fills(state);
         let fill = tile._ocFill;
@@ -849,6 +856,14 @@ class OpencodeAgentsApplet extends Applet.Applet {
                 fill.set_style("background-color: " + State.color(state) + ";");
                 fill.remove_clip();
                 fill.visible = true;
+            } else if (state === "working") {
+                // The session went on to work: cancel any retraction and clear
+                // the fill so the working bar owns the tile from this frame on.
+                this._stopCooling(tile);
+                if (tile._ocId) {
+                    delete this._cooling[tile._ocId];
+                }
+                this._clearFill(fill, tile);
             } else if (tile._ocCooling) {
                 // the cooldown owns the fill until it finishes
             } else if (tile._ocFilled && this.animateTiles) {
@@ -910,12 +925,15 @@ class OpencodeAgentsApplet extends Applet.Applet {
     // ---- the fill cooldown ---------------------------------------------
 
     // A fill that has just ended keeps its colour and retracts to the right over
-    // six seconds, the way the studio's sidebar sweeps it away. A sweep instead
-    // of a fade: a fading colour passes through muddy mixes on the way out, this
-    // one just gets narrower until the tile is its old self again. The fill
-    // layer is clipped rather than the tile, and the text's dark/bright boundary
-    // travels with its edge (see _splitText), so both sides of the sweep stay
-    // readable the whole way.
+    // six seconds, the way the studio's sidebar sweeps it away. A conversation
+    // that goes back to work never gets here: _paintTile clears the fill
+    // immediately so its amber bar takes over.
+    //
+    // The retraction is a sweep instead of a fade: a fading colour passes
+    // through muddy mixes on the way out, this one just gets narrower until the
+    // tile is its old self again. The fill layer is clipped rather than the
+    // tile, and the text's dark/bright boundary travels with its edge (see
+    // _splitText), so both sides of the sweep stay readable the whole way.
     _coolTile(tile) {
         let fill = tile._ocFill;
         if (!fill) {

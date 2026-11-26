@@ -52,13 +52,16 @@ Fix the widget… Ask which file… Refactor the …
 - **Motion** - a session that starts slides in from the left and fades in; one
   that leaves slides out to the left and fades out, while the tiles to its right
   take the freed space back so the row never jumps. A fill that stops being
-  needed - the block was answered, or the finish was read - sweeps away to the
-  right over six seconds while its tile stays in place, exactly as the studio's
-  sidebar retracts the same fill, and the dark/bright edge in its text follows
-  the colour so both sides stay readable; only then does the tile leave. While
-  any agent works a thin amber bar sweeps along the top of its tile, loop after
-  loop, where the studio's working dot pulses. Turn it off with *Animate new and
-  finished agents* for instant changes, a steady bar and no screen-border frame.
+  needed - the block was answered and the turn stopped, or the finish was read -
+  sweeps away to the right over six seconds while its tile stays in place,
+  exactly as the studio's sidebar retracts the same fill, and the dark/bright
+  edge in its text follows the colour so both sides stay readable; only then
+  does the tile leave. A conversation that goes straight back to work drops its
+  fill at once and the amber bar takes over, so the red or green sweep never
+  plays over a running turn. While any agent works a thin amber bar sweeps along
+  the top of its tile, loop after loop, where the studio's working dot pulses.
+  Turn it off with *Animate new and finished agents* for instant changes, a
+  steady bar and no screen-border frame.
 - **Idle** - a dimmed robot icon, or nothing at all if you prefer
   (*Hide the panel icon when no agent is working*).
 - **Never any desktop notification** - the applet only draws in the panel. The
