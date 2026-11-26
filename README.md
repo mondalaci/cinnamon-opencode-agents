@@ -30,12 +30,14 @@ Fix the widget… Ask which file… Refactor the …
 - **A tile that needs a human fills with its colour** - a conversation waiting
   for you (a permission request, or a question offering its choices) is painted
   red across the whole tile, and one whose turn finished and that nobody has
-  looked at yet is painted green, so both are visible from across the room. The
-  amber working tiles keep the panel background: they say all there is to say
-  with their thin sweeping bar. The moment such a tile appears, a frame in the
-  same colour lights the border of the monitor the panel lives on and closes in
-  on the tile, then fades out - a glance at the screen catches it even when the
-  panel itself is out of view.
+  looked at yet is painted green, so both are visible from across the room. Its
+  two lines are drawn dark over the colour and in the panel's own bright text
+  where the colour is not, so a fill that is only part-way through its sweep is
+  readable on both sides of the edge. The amber working tiles keep the panel
+  background: they say all there is to say with their thin sweeping bar. The
+  moment such a tile appears, a frame in the same colour lights the border of the
+  monitor the panel lives on and closes in on the tile, then fades out - a glance
+  at the screen catches it even when the panel itself is out of view.
 
 - **Project and subject** - the top line is the project the conversation lives
   in (its registered name, else the folder name), the bottom line the
@@ -52,9 +54,10 @@ Fix the widget… Ask which file… Refactor the …
   take the freed space back so the row never jumps. A fill that stops being
   needed - the block was answered, or the finish was read - sweeps away to the
   right over six seconds while its tile stays in place, exactly as the studio's
-  sidebar retracts the same fill; only then does the tile leave. While any agent
-  works a thin amber bar sweeps along the top of its tile, loop after loop,
-  where the studio's working dot pulses. Turn it off with *Animate new and
+  sidebar retracts the same fill, and the dark/bright edge in its text follows
+  the colour so both sides stay readable; only then does the tile leave. While
+  any agent works a thin amber bar sweeps along the top of its tile, loop after
+  loop, where the studio's working dot pulses. Turn it off with *Animate new and
   finished agents* for instant changes, a steady bar and no screen-border frame.
 - **Idle** - a dimmed robot icon, or nothing at all if you prefer
   (*Hide the panel icon when no agent is working*).
@@ -290,6 +293,15 @@ on an OS-assigned `--port 0` port, one announced by a service file) and covers:
   sequence runs only when a fill *appears* - a tile that stays red or green is
   not announced again, and the applet's first render is not a transition, so a
   Cinnamon restart does not flash the screen for tiles that were already there.
+- A filled tile's text is **two layers**, not one recoloured line: the panel's
+  bright line underneath, and a copy in `State.ink()` above it, each clipped to
+  the stretch its colour belongs to (`_splitText`). A fill that retracts moves
+  the clip boundary with its edge, so the dark and bright halves meet exactly at
+  the colour instead of the whole line fading through a muddy mix; the copies
+  share the line widths `fitWidths` hands out, so they ellipsize at the same
+  point. The layer that must not show is clipped to nothing and faded out,
+  never hidden: clip and opacity cost the layout nothing, while `visible = false`
+  would change the tile's width.
 - The working bar is a thin band along the tile's top edge and takes no layout
   room at all: both of its layers span the whole tile and are **clipped** to the
   band, so the band overlays the content's first pixel instead of adding a row

@@ -123,20 +123,6 @@ function iconSizeFor(pixels) {
     return Math.max(1, Math.round(pixels / stageScale()));
 }
 
-// One 0..255 colour channel as two hex digits, for building a "#rrggbb" string
-// from a Clutter colour.
-function hexChannel(value) {
-    let n = Math.round(value);
-    if (n < 0) {
-        n = 0;
-    }
-    if (n > 255) {
-        n = 255;
-    }
-    let text = n.toString(16);
-    return text.length < 2 ? "0" + text : text;
-}
-
 // The idle icon, rendered as a scalable icon so it stays smooth at any size.
 // Falls back to a theme icon if the shipped file cannot be loaded.
 function createAgentIcon(size) {
@@ -476,8 +462,7 @@ class OpencodeAgentsApplet extends Applet.Applet {
         // Measure at the natural width: a width forced on a line last time
         // would otherwise be what we read back as its need.
         for (let i = 0; i < tiles.length; i++) {
-            this._setLineWidth(tiles[i]._ocProject, -1);
-            this._setLineWidth(tiles[i]._ocSubject, -1);
+            this._setTileLineWidths(tiles[i], -1);
         }
 
         let budget = this._availableRowWidth();
@@ -517,9 +502,18 @@ class OpencodeAgentsApplet extends Applet.Applet {
             // Never below the tile's own minimum: a squeezed line should
             // ellipsize, not collapse to nothing.
             let width = Math.max(minimums[i], Math.round(widths[i]));
-            this._setLineWidth(flexible[i]._ocProject, width);
-            this._setLineWidth(flexible[i]._ocSubject, width);
+            this._setTileLineWidths(flexible[i], width);
         }
+    }
+
+    // The two text layers carry the same lines, so a width forced on one has to
+    // be forced on its dark copy too - otherwise the copy would ellipsize at a
+    // different point than the line it covers.
+    _setTileLineWidths(tile, width) {
+        this._setLineWidth(tile._ocProject, width);
+        this._setLineWidth(tile._ocProjectInk, width);
+        this._setLineWidth(tile._ocSubject, width);
+        this._setLineWidth(tile._ocSubjectInk, width);
     }
 
     _setLineWidth(label, width) {
@@ -655,28 +649,26 @@ class OpencodeAgentsApplet extends Applet.Applet {
         tile.add_child(bar);
         tile._ocBar = bar;
 
-        let row = new St.BoxLayout({
-            style_class: "opencode-agents-tile-content",
-            reactive: false,
-        });
-        row.set_x_align(Clutter.ActorAlign.FILL);
-        row.set_y_align(Clutter.ActorAlign.FILL);
-        row.set_x_expand(true);
-        row.set_y_expand(true);
-        tile.add_child(row);
-        tile._ocRow = row;
-
-        let text = new St.BoxLayout({
-            style_class: "opencode-agents-tile-text",
-            vertical: true,
-            reactive: false,
-        });
-        text.set_y_align(Clutter.ActorAlign.CENTER);
-        text.set_x_align(Clutter.ActorAlign.START);
-        row.add_child(text);
-        tile._ocText = text;
+        // The lines are drawn twice, in two layers that span the tile alike: the
+        // panel's own bright text underneath, and the dark ink that reads on the
+        // fill above it. Each layer is clipped to the stretch its colour belongs
+        // to (see _splitText), so where a fill ends the two meet at its edge -
+        // the text is never dark on the panel or bright on the colour.
+        let bright = this._createTextLayer(tile);
+        tile._ocText = bright.text;
+        tile._ocTextRow = bright.row;
+        let dark = this._createTextLayer(tile);
+        dark.text.set_style("color: " + State.ink() + ";");
+        tile._ocInk = dark.text;
+        tile._ocInkRow = dark.row;
+        // Nothing is filled yet: the dark layer starts clipped to nothing and
+        // transparent.
+        dark.row.set_clip(0, 0, 0, BAR_CLIP_END);
+        dark.row.set_opacity(0);
         tile._ocProject = null;
         tile._ocSubject = null;
+        tile._ocProjectInk = null;
+        tile._ocSubjectInk = null;
         tile._ocId = id;
         tile._ocFilled = false;
         tile._ocCooling = false;
@@ -694,6 +686,34 @@ class OpencodeAgentsApplet extends Applet.Applet {
 
         this._refreshTile(tile, id, entry, 0);
         return tile;
+    }
+
+    // One text layer: the two lines, left-aligned, in a row that spans the tile
+    // so both layers are clipped in the same coordinates. The caller adds the
+    // labels; the dark layer carries the ink colour on the inner box, which the
+    // labels inherit, so a state change never has to restyle them. The row is
+    // the layer's full-tile frame - it is what _splitText clips, because the
+    // inner box is inset by the row's own padding and would be off by it.
+    _createTextLayer(tile) {
+        let row = new St.BoxLayout({
+            style_class: "opencode-agents-tile-content",
+            reactive: false,
+        });
+        row.set_x_align(Clutter.ActorAlign.FILL);
+        row.set_y_align(Clutter.ActorAlign.FILL);
+        row.set_x_expand(true);
+        row.set_y_expand(true);
+        tile.add_child(row);
+
+        let text = new St.BoxLayout({
+            style_class: "opencode-agents-tile-text",
+            vertical: true,
+            reactive: false,
+        });
+        text.set_y_align(Clutter.ActorAlign.CENTER);
+        text.set_x_align(Clutter.ActorAlign.START);
+        row.add_child(text);
+        return { row: row, text: text };
     }
 
     // The idle marker: a dimmed robot icon, or nothing when the row is hidden.
@@ -732,17 +752,26 @@ class OpencodeAgentsApplet extends Applet.Applet {
         let wantsSubject = this.tileShowSubject && session && session.title;
         // No length cap: the tile takes the room it needs and the row ellipsizes
         // only when the panel has none left to give.
-        this._syncLabel(actor, "_ocProject", text, wantsProject ? session.project : null,
+        this._syncLabel(actor, "_ocProject", wantsProject ? session.project : null,
             "opencode-agents-tile-project", 0);
-        this._syncLabel(actor, "_ocSubject", text, wantsSubject ? session.title : null,
+        this._syncLabel(actor, "_ocSubject", wantsSubject ? session.title : null,
             "opencode-agents-tile-subject", 1);
         text.visible = !!(wantsProject || wantsSubject);
         this._paintTile(actor, state);
     }
 
-    // Adds, updates or drops one of a tile's two lines, so a setting change or
-    // a missing value does not leave a stale label behind.
-    _syncLabel(tile, slot, text, wanted, styleClass, index) {
+    // Adds, updates or drops one of a tile's two lines, in both text layers, so
+    // a setting change or a missing value does not leave a stale label behind
+    // and the dark copy never disagrees with the line it covers.
+    _syncLabel(tile, slot, wanted, styleClass, index) {
+        this._syncLine(tile, tile._ocText, slot, wanted, styleClass, index);
+        this._syncLine(tile, tile._ocInk, slot + "Ink", wanted, styleClass, index);
+    }
+
+    _syncLine(tile, text, slot, wanted, styleClass, index) {
+        if (!text) {
+            return;
+        }
         let label = tile[slot];
         if (wanted === null || wanted === "") {
             if (label) {
@@ -801,11 +830,11 @@ class OpencodeAgentsApplet extends Applet.Applet {
 
     // A tile that waits for a human (red) or whose answer nobody has read yet
     // (green) fills with the state's colour; the fill layer behind the text
-    // carries it and the two text lines turn dark, because the panel's own text
-    // is light and would vanish on it. Every other state clears all of that, so
-    // a tile that starts working, is acknowledged or drops to idle goes back to
-    // the panel background - except that a fill which has just ended retracts
-    // instead of vanishing (see _coolTile).
+    // carries it and the dark text layer covers the bright one, because the
+    // panel's own text is light and would vanish on it. Every other state clears
+    // all of that, so a tile that starts working, is acknowledged or drops to
+    // idle goes back to the panel background - except that a fill which has just
+    // ended retracts instead of vanishing (see _coolTile).
     _paintTile(tile, state) {
         let filled = State.fills(state);
         let fill = tile._ocFill;
@@ -832,27 +861,61 @@ class OpencodeAgentsApplet extends Applet.Applet {
         // The bar follows the fill's state, so it is painted after it: a tile
         // that just filled must not leave a working bar over the colour.
         this._paintBar(tile, state);
-        let text = tile._ocText;
-        if (!text || tile._ocCooling) {
-            // while a fill retracts, the cooldown owns the text colours
+        if (!tile._ocText || !tile._ocInk || tile._ocCooling) {
+            // while a fill retracts, the cooldown owns the text layers
             return;
         }
-        let ink = filled ? "color: " + State.ink() + ";" : "";
-        let lines = text.get_children();
-        for (let i = 0; i < lines.length; i++) {
-            lines[i].set_style(ink);
+        if (filled) {
+            // The fill covers the tile whole: the dark layer alone is visible.
+            // Its bright counterpart is clipped away rather than hidden, so the
+            // two copies cannot both draw into the same antialiased pixels, and
+            // a hidden layer cannot change the tile's preferred size.
+            this._splitText(tile, 0, BAR_CLIP_END, BAR_CLIP_END);
+        } else {
+            tile._ocTextRow.remove_clip();
+            tile._ocTextRow.set_opacity(255);
+            tile._ocInkRow.set_opacity(0);
         }
+    }
+
+    // Divides the two text layers at the fill's left edge: the dark layer shows
+    // from `edge` to the tile's right side, the bright one from its left side to
+    // `edge`. A clip costs the layout nothing, so the split moves without ever
+    // re-laying the tile out, and each line is drawn on exactly the background
+    // its colour belongs to. The width and height are the fill's own, so the
+    // boundary is the same x the fill is clipped at.
+    //
+    // The layer a split puts on the wrong side of the tile (the bright copy of a
+    // whole fill, the dark copy of none) is faded out as well as clipped: a
+    // zero-width clip already paints nothing, but opacity says so outright.
+    _splitText(tile, edge, width, height) {
+        let bright = tile._ocTextRow;
+        let dark = tile._ocInkRow;
+        if (!bright || !dark) {
+            return;
+        }
+        let left = Math.max(0, Math.round(edge));
+        // A tile that has not been allocated yet (a fill that appeared on the
+        // same frame as its sweep started) gives a zero width; reading it as
+        // "the whole tile" keeps the split where the fill was - full - instead
+        // of clipping both layers to nothing.
+        let span = width > 0 ? width : BAR_CLIP_END;
+        let tall = height > 0 ? height : BAR_CLIP_END;
+        bright.set_clip(0, 0, Math.max(0, Math.min(left, span)), tall);
+        dark.set_clip(left, 0, Math.max(0, span - left), tall);
+        bright.set_opacity(left > 0 ? 255 : 0);
+        dark.set_opacity(left < span ? 255 : 0);
     }
 
     // ---- the fill cooldown ---------------------------------------------
 
     // A fill that has just ended keeps its colour and retracts to the right over
-    // six seconds, the way the studio's sidebar sweeps it away, while the ink
-    // turns back into the panel's text colour. A sweep instead of a fade: a
-    // fading colour passes through muddy mixes on the way out, this one just
-    // gets narrower until the tile is its old self again. The fill layer is
-    // clipped rather than the tile, so the text stays readable on the uncovered
-    // side.
+    // six seconds, the way the studio's sidebar sweeps it away. A sweep instead
+    // of a fade: a fading colour passes through muddy mixes on the way out, this
+    // one just gets narrower until the tile is its old self again. The fill
+    // layer is clipped rather than the tile, and the text's dark/bright boundary
+    // travels with its edge (see _splitText), so both sides of the sweep stay
+    // readable the whole way.
     _coolTile(tile) {
         let fill = tile._ocFill;
         if (!fill) {
@@ -860,8 +923,6 @@ class OpencodeAgentsApplet extends Applet.Applet {
         }
         this._stopCooling(tile);
         let duration = COOL_MS;
-        let target = this._themeTextHex();
-        let lines = tile._ocText ? tile._ocText.get_children() : [];
         let started = GLib.get_monotonic_time() / 1000;
         let self = this;
         let id = 0;
@@ -878,21 +939,14 @@ class OpencodeAgentsApplet extends Applet.Applet {
                 let height = fill.get_height();
                 let left = Math.round(width * p);
                 fill.set_clip(left, 0, Math.max(0, width - left), height);
-                let ink = State.mix(State.ink(), target, p);
-                for (let i = 0; i < lines.length; i++) {
-                    lines[i].set_style("color: " + ink + ";");
-                }
+                self._splitText(tile, left, width, height);
             } catch (e) {
                 // The actor went away underneath us (applet removed, a rebuild),
                 // or a lib module is stale after a reload. Either way the fill
                 // must not be left stuck half swept.
                 self._forgetCooling(id, tile);
                 try {
-                    fill.remove_clip();
-                    fill.visible = false;
-                    for (let i = 0; i < lines.length; i++) {
-                        lines[i].set_style("");
-                    }
+                    self._clearFill(fill, tile);
                 } catch (ignored) {
                     // the actor is gone with the applet
                 }
@@ -909,11 +963,7 @@ class OpencodeAgentsApplet extends Applet.Applet {
             if (elapsed >= duration) {
                 self._forgetCooling(id, tile);
                 try {
-                    fill.remove_clip();
-                    fill.visible = false;
-                    for (let i = 0; i < lines.length; i++) {
-                        lines[i].set_style("");
-                    }
+                    self._clearFill(fill, tile);
                 } catch (e) {
                     // the actor went away underneath us
                 }
@@ -926,6 +976,21 @@ class OpencodeAgentsApplet extends Applet.Applet {
         id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, FRAME_MS, step);
         tile._ocCoolId = id;
         this._animations.push(id);
+    }
+
+    // Puts a tile back to its plain state after a fill ends or a sweep is cut
+    // short: no colour, no clip on the bright line, and the dark layer clipped
+    // to nothing.
+    _clearFill(fill, tile) {
+        fill.remove_clip();
+        fill.visible = false;
+        if (tile._ocTextRow) {
+            tile._ocTextRow.remove_clip();
+            tile._ocTextRow.set_opacity(255);
+        }
+        if (tile._ocInkRow) {
+            tile._ocInkRow.set_opacity(0);
+        }
     }
 
     // The sweep has finished: the tile is no longer held, so the next render
@@ -991,30 +1056,6 @@ class OpencodeAgentsApplet extends Applet.Applet {
         if (!keepFill && tile._ocFill) {
             tile._ocFill.remove_clip();
         }
-    }
-
-    // The panel's own text colour, as "#rrggbb", so a cooling tile's ink can end
-    // up at the colour the tile would have had without a fill. The row's theme
-    // node is asked, not the tile's labels: those carry the ink while filled.
-    _themeTextHex() {
-        let actors = [this._tilesBox, this.actor];
-        for (let i = 0; i < actors.length; i++) {
-            try {
-                let node = actors[i] ? actors[i].get_theme_node() : null;
-                if (!node) {
-                    continue;
-                }
-                let colour = node.get_foreground_color();
-                if (colour) {
-                    return "#" + hexChannel(colour.red) + hexChannel(colour.green) +
-                        hexChannel(colour.blue);
-                }
-            } catch (e) {
-                // fall through to the next source
-            }
-        }
-        // The panel theme's own light text, if nothing could be measured.
-        return "#e1e1e1";
     }
 
     // ---- the working bar sweep -----------------------------------------
