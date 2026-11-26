@@ -20,12 +20,13 @@
     padding: 0px;
 }
 
-/* The top padding is the working bar's own row; the bar overlays it instead of
-   taking height of its own, so the two lines keep the room the panel gives
-   them. */
+/* The padding is horizontal only: at the two lines' size the panel's height is
+   the whole budget, and a pixel above and below would push the fill over the
+   panel's edge. The bar still overlays the content's top instead of taking a row
+   of its own, so it costs the text nothing. */
 .opencode-agents-tile-content {
     spacing: 6px;
-    padding: 1px 5px;
+    padding: 0px 5px;
 }
 
 /* The working bar's two layers span the whole tile and are clipped to the band
@@ -53,21 +54,21 @@
 }
 
 /* The project line is quieter than the conversation subject, but the same
-   size: the two lines read as one block. 0.83em is what lets two lines, their
-   padding and a pixel of margin above and below fit the panel's 30 logical
-   pixels - at 0.95em the tile is taller than the panel and its fill spills
-   over the edge. */
+   size: the two lines read as one block. 0.95em is the panel's whole budget
+   spent on the text: two lines are 58 of the panel's 60 device pixels, which is
+   why the content carries no vertical padding - any, and the fill would reach
+   past the panel's edge rather than sit inside it. */
 .opencode-agents-tile-project {
-    font-size: 0.83em;
+    font-size: 0.95em;
     opacity: 0.75;
 }
 
 .opencode-agents-tile-subject {
-    font-size: 0.83em;
+    font-size: 0.95em;
 }
 
 .opencode-agents-tile-overflow {
-    font-size: 0.83em;
+    font-size: 0.95em;
     opacity: 0.8;
 }
 

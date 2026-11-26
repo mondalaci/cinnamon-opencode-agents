@@ -263,6 +263,12 @@ on an OS-assigned `--port 0` port, one announced by a service file) and covers:
   Edited `lib/*.js` modules stay cached in the Cinnamon process, so those need a
   Cinnamon restart (`org.Cinnamon.RestartCinnamon true`) — a fresh start always
   works.
+- `stylesheet.css` is cached the same way, and worse: a reload leaves the parsed
+  CSS the applet was loaded with, so a size change simply does not appear. What
+  worked here is `cinnamon --replace` in the background — `RestartCinnamon`
+  returned without the change showing, and a probe rule (a 20px tile padding) was
+  still inert after it, which is what proved the stylesheet, not the applet, was
+  stale.
 - The tile animations and the working bar sweep are driven by the applet's own
   frame loop (`lib/easing.js` + a `GLib.timeout_add`) rather than by Clutter
   easing. Cinnamon applies an actor's final value immediately when desktop
@@ -272,7 +278,7 @@ on an OS-assigned `--port 0` port, one announced by a service file) and covers:
   `animate-tiles` setting is the switch that matters.
 - The working bar is a thin band along the tile's top edge and takes no layout
   room at all: both of its layers span the whole tile and are **clipped** to the
-  band, so the band overlays the content's top padding instead of adding a row
+  band, so the band overlays the content's first pixel instead of adding a row
   of its own (two text lines already fill a 30px panel, and a row of its own is
   what used to push the fill over the panel's edge). It cannot be a layer pinned
   to an edge either - Cinnamon's bin layout centres a bin child whatever its
@@ -306,11 +312,13 @@ on an OS-assigned `--port 0` port, one announced by a service file) and covers:
   way out, so an interrupted run cannot leave the applet pointed at a dead mock.
   Never inject a model into a live applet: the panel keeps showing it until the
   applet is reloaded.
-- The two lines are set at `0.83em` because that is what fits: a 30px panel is
-  60 device pixels here, two lines at `0.95em` are 58, and the 1px padding and
-  the fill's margin have to come out of the same budget. Raising the panel's
-  height setting is the alternative - it buys back a bigger font at the price of
-  a taller panel for every applet.
+- The two lines spend the panel's whole height: at `0.95em` they are 58 of a
+  30px panel's 60 device pixels, which is as large as they go before they stop
+  fitting. The content therefore carries no vertical padding - the 1px it used
+  to have is what the last step of type bought - so the tile is the panel's
+  height and the fill's edge is the panel's own edge; a rim would have to come
+  out of the text. Raising the panel's height setting is the only way to go
+  bigger, at the price of a taller panel for every applet.
 - Theme-node lengths (`spacing`, `padding`) come back in **device** pixels -
   multiplied by the stage scale factor, which is 2 on a HiDPI panel - while the
   applet's own settings are logical pixels. So a `spacing: 10px` rule in the
