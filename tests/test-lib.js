@@ -347,6 +347,21 @@ function testEasing() {
     equal("easing: interpolate", Easing.value(-48, 0, 0.5), -24);
     equal("easing: interpolate upwards", Easing.value(0, 255, 0.25), 63.75);
 
+    // the screen-border frame closes in on a tile: every edge of the rectangle
+    // travels from the monitor's rectangle to the tile's
+    let screen = { x: 0, y: 0, width: 100, height: 100 };
+    let tile = { x: 40, y: 50, width: 20, height: 10 };
+    let middle = Easing.rect(screen, tile, 0.5);
+    equal("easing: frame x half way", middle.x, 20);
+    equal("easing: frame y half way", middle.y, 25);
+    equal("easing: frame width half way", middle.width, 60);
+    equal("easing: frame height half way", middle.height, 55);
+    let arrived = Easing.rect(screen, tile, 1);
+    equal("easing: frame reaches the tile", arrived.x + "," + arrived.y + "," +
+        arrived.width + "," + arrived.height, "40,50,20,10");
+    equal("easing: frame never has a negative size",
+        Easing.rect(tile, { x: 0, y: 0, width: 0, height: 0 }, 2).width, 0);
+
     // the working bar sweeps: a stretch enters from behind one end, crosses the
     // bar and leaves behind the other, then starts again
     let half = Easing.barSweep(Easing.BAR_PERIOD_MS / 2, 100);

@@ -32,7 +32,10 @@ Fix the widget… Ask which file… Refactor the …
   red across the whole tile, and one whose turn finished and that nobody has
   looked at yet is painted green, so both are visible from across the room. The
   amber working tiles keep the panel background: they say all there is to say
-  with their thin sweeping bar.
+  with their thin sweeping bar. The moment such a tile appears, a frame in the
+  same colour lights the border of the monitor the panel lives on and closes in
+  on the tile, then fades out - a glance at the screen catches it even when the
+  panel itself is out of view.
 
 - **Project and subject** - the top line is the project the conversation lives
   in (its registered name, else the folder name), the bottom line the
@@ -52,7 +55,7 @@ Fix the widget… Ask which file… Refactor the …
   sidebar retracts the same fill; only then does the tile leave. While any agent
   works a thin amber bar sweeps along the top of its tile, loop after loop,
   where the studio's working dot pulses. Turn it off with *Animate new and
-  finished agents* for instant changes and a steady bar.
+  finished agents* for instant changes, a steady bar and no screen-border frame.
 - **Idle** - a dimmed robot icon, or nothing at all if you prefer
   (*Hide the panel icon when no agent is working*).
 - **Never any desktop notification** - the applet only draws in the panel. The
@@ -180,7 +183,7 @@ set in its own storage), so an applet-only rule could never match.
 | --- | --- |
 | General | poll interval (2 s), session details refresh (30 s), projects checked for pending requests (12) |
 | Servers | service file on/off + path, `/proc` scan on/off, additional servers |
-| Panel | show the project, show the subject, agents shown side by side (5), animate new/finished agents and the bar sweep, hide when idle |
+| Panel | show the project, show the subject, agents shown side by side (5), animate new/finished agents, the bar sweep and the screen-border alert, hide when idle |
 | Menu | session title length, show model, show directory, show cost/tokens, list idle servers |
 | Actions | session action: copy the session ID, run a command (`{id} {title} {project} {dir} {agent} {model} {status}`), or nothing |
 
@@ -198,7 +201,7 @@ opencode-agents@laci/     the applet (installed as one directory)
   lib/state.js            the tile states, colours and their transitions (pure)
   lib/format.js           tooltip/menu formatting (pure functions)
   lib/tiles.js            the tile row diff and width fit (pure)
-  lib/easing.js           slide curves and the working bar sweep (pure)
+  lib/easing.js           slide curves, the working bar sweep and the screen-frame geometry (pure)
   lib/agenticon.js        resolves the idle icon path (pure, testable)
   icons/lucide-bot.svg    the idle icon (Lucide bot, ISC), tinted to the panel tone
   settings-schema.json    settings UI definition
@@ -228,7 +231,7 @@ on an OS-assigned `--port 0` port, one announced by a service file) and covers:
   monitor reports on the first poll, and acknowledgement
 - the tile row diff: slides in and out, reordering, the overflow tile, the idle
   tile, and the width fit that hands a short tile's slack to a longer one
-- the easing curves and the working bar sweep
+- the easing curves, the working bar sweep and the screen-frame rectangle
 - the idle icon: that the file exists, is an SVG, carries its licence note and
   is tinted, that its paths cannot escape the applet directory, that the old
   inverted twin is gone, and that the settings offer no icon chooser
@@ -276,6 +279,17 @@ on an OS-assigned `--port 0` port, one announced by a service file) and covers:
   of installs), which would silently turn every `ease()` into a jump; driving the
   sweep here keeps it visible for anyone who asked for it, and the
   `animate-tiles` setting is the switch that matters.
+- The screen-border alert is the same kind of frame loop. Its actor lives in
+  `Main.uiGroup`, above the panel and every window, because it starts as the
+  border of the whole monitor; it is non-reactive, so it never takes a click.
+  The monitor is the one whose rectangle holds the tile's centre, so a
+  multi-monitor desktop does not flash the wrong screen. The tile is measured
+  with `get_transformed_position()`/`get_transformed_size()` on every frame, so
+  the frame still lands on it when the row reflows mid-flight; the geometry
+  between the two rectangles comes from `Easing.rect` in `lib/easing.js`. The
+  sequence runs only when a fill *appears* - a tile that stays red or green is
+  not announced again, and the applet's first render is not a transition, so a
+  Cinnamon restart does not flash the screen for tiles that were already there.
 - The working bar is a thin band along the tile's top edge and takes no layout
   room at all: both of its layers span the whole tile and are **clipped** to the
   band, so the band overlays the content's first pixel instead of adding a row

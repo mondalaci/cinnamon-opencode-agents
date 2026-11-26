@@ -46,6 +46,17 @@
     border-radius: 5px;
 }
 
+/* The screen-border alert: a frame in the state's colour that starts around the
+   whole monitor and closes in on the tile that just turned red or green. The
+   applet sets the border colour (it is the state's) and the position and size
+   every frame; only the look that does not change lives here. The fill stays
+   transparent, so the screen behind it is untouched. */
+.opencode-agents-screen-frame {
+    background-color: transparent;
+    border: 3px solid transparent;
+    border-radius: 8px;
+}
+
 .opencode-agents-tile-text {
     spacing: 0px;
     /* The panel theme centres text; the two lines must start at the same left

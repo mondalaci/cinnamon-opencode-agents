@@ -24,6 +24,7 @@ const Applet = imports.ui.applet;
 const Clutter = imports.gi.Clutter;
 const Gio = imports.gi.Gio;
 const GLib = imports.gi.GLib;
+const Main = imports.ui.main;
 const Pango = imports.gi.Pango;
 const PopupMenu = imports.ui.popupMenu;
 const Settings = imports.ui.settings;
@@ -51,6 +52,7 @@ const OVERFLOW_STYLE = "opencode-agents-tile-overflow";
 const BAR_STYLE = "opencode-agents-bar";
 const BAR_TRACK_STYLE = "opencode-agents-bar-track";
 const FILL_STYLE = "opencode-agents-tile-fill";
+const FRAME_STYLE = "opencode-agents-screen-frame";
 const IN_ANIMATION_MS = 250;
 const OUT_ANIMATION_MS = 200;
 // How long a fill takes to retract once its tile stops waiting for a human.
@@ -77,6 +79,19 @@ const SLIDE_DISTANCE = 24;
 // Device pixels kept free beside the other panel applets, so a full row never
 // reaches the point where the panel starts squeezing every box to its minimum.
 const PANEL_MARGIN = 8;
+
+// The screen-border alert: a green or red tile is announced by a frame around
+// the whole monitor, which then closes in on the tile and fades out. It is a
+// short sequence - long enough to catch the eye from across the room, short
+// enough not to stand between the user and the panel.
+const ALERT_HOLD_MS = 90;      // the frame sits on the screen border, full size
+const ALERT_TRAVEL_MS = 480;   // then closes in on the tile
+const ALERT_SETTLE_MS = 220;   // rests on the tile so the eye lands there
+const ALERT_FADE_MS = 220;     // and is gone
+const ALERT_TOTAL_MS = ALERT_HOLD_MS + ALERT_TRAVEL_MS + ALERT_SETTLE_MS + ALERT_FADE_MS;
+// The frame sits this many device pixels outside the tile, so it surrounds the
+// tile instead of drawing its border over the tile's own edge.
+const ALERT_GAP = 1;
 
 // What the panel is about: a session waiting for a human, one that is running,
 // or a finish nobody has read yet. The monitor also reports the conversations
@@ -166,6 +181,8 @@ class OpencodeAgentsApplet extends Applet.Applet {
         this._known = {};         // session id -> last known session info
         this._acknowledged = {};  // session id -> true, once the user has seen it
         this._cooling = {};       // session id -> true, while its fill retracts
+        this._alerted = {};       // session id -> the fill last announced on screen
+        this._frames = [];        // screen-border alert actors still animating
         this._barTimer = 0;
         this._resizeQueued = false;
         this._resizeIdle = 0;
@@ -195,23 +212,6 @@ class OpencodeAgentsApplet extends Applet.Applet {
         this._watchWidth(this.panel && this.panel.actor);
         this._watchWidth(this._panelLocation);
         this._queueResize();
-    }
-
-    on_applet_removed_from_panel() {
-        if (this._resizeIdle) {
-            GLib.source_remove(this._resizeIdle);
-            this._resizeIdle = 0;
-            this._resizeQueued = false;
-        }
-        for (let i = 0; i < this._panelSignals.length; i++) {
-            let entry = this._panelSignals[i];
-            try {
-                entry.actor.disconnect(entry.id);
-            } catch (e) {
-                // the actor is being torn down with us
-            }
-        }
-        this._panelSignals = [];
     }
 
     _watchWidth(actor) {
@@ -418,9 +418,39 @@ class OpencodeAgentsApplet extends Applet.Applet {
         }
         this._tileIds = plan.order.slice();
         this._resizeTiles(plan.order);
+        // After the row is in place, so the tile the frame closes in on has an
+        // allocation to be measured.
+        this._alertTiles(entries, plan.order, animate);
         this._tilesRendered = true;
         this._tilesBox.visible = !(entries.length === 0 && this.hideWhenIdle);
         this._syncBar();
+    }
+
+    // A green or red tile is an interruption, so when one appears its colour
+    // sweeps in from the border of the monitor the panel lives on and settles
+    // around the tile (see _flashFrame). Only a fill that was not on screen in
+    // the previous render starts the sequence: a tile that stayed red or green
+    // has already been announced, and the first render after the applet starts
+    // is not a transition. A tile beyond the row's limit has no rectangle to
+    // aim at, so it does not flash.
+    _alertTiles(entries, order, animate) {
+        let filled = {};
+        for (let i = 0; i < order.length; i++) {
+            let id = order[i];
+            let entry = Tiles.entryFor(id, entries);
+            if (!entry || !State.fills(entry.state)) {
+                continue;
+            }
+            filled[id] = entry.state;
+            if (!animate || this._alerted[id] === entry.state) {
+                continue;
+            }
+            let tile = this._tiles[id];
+            if (tile) {
+                this._flashFrame(tile, entry.state);
+            }
+        }
+        this._alerted = filled;
     }
 
     // Fits the tile row into the room the panel leaves beside the other
@@ -1228,6 +1258,170 @@ class OpencodeAgentsApplet extends Applet.Applet {
         return SLIDE_DISTANCE;
     }
 
+    // Announces a newly filled tile: a frame in the state's colour appears
+    // around the whole monitor, closes in on the tile, rests there for a moment
+    // and fades out. It is drawn in Main.uiGroup, above the panel and every
+    // window, because it starts as the screen's own border; being non-reactive,
+    // it never takes a click. The tile is measured every frame, so a row that
+    // reflows under the frame still leads it to the right rectangle.
+    _flashFrame(tile, state) {
+        if (!Main.uiGroup) {
+            return;
+        }
+        // A tile that is not on a stage yet (the applet is still being added to
+        // the panel) has no screen rectangle to aim at.
+        try {
+            if (!tile.get_stage()) {
+                return;
+            }
+        } catch (e) {
+            return;
+        }
+        let monitor = this._monitorRectFor(tile);
+        if (monitor.width <= 0 || monitor.height <= 0) {
+            return;
+        }
+        let frame = new St.Widget({
+            style_class: FRAME_STYLE,
+            reactive: false,
+        });
+        frame.set_style("border-color: " + State.color(state) + ";");
+        frame.set_position(monitor.x, monitor.y);
+        frame.set_size(monitor.width, monitor.height);
+        Main.uiGroup.add_child(frame);
+        this._frames.push(frame);
+
+        let started = GLib.get_monotonic_time() / 1000;
+        let self = this;
+        let id = 0;
+
+        let finish = function () {
+            let index = self._animations.indexOf(id);
+            if (index >= 0) {
+                self._animations.splice(index, 1);
+            }
+            let at = self._frames.indexOf(frame);
+            if (at >= 0) {
+                self._frames.splice(at, 1);
+            }
+            try {
+                frame.destroy();
+            } catch (e) {
+                // the actor is gone with the screen
+            }
+            return GLib.SOURCE_REMOVE;
+        };
+
+        let step = function () {
+            let elapsed = GLib.get_monotonic_time() / 1000 - started;
+            let target;
+            try {
+                let [x, y] = tile.get_transformed_position();
+                let [width, height] = tile.get_transformed_size();
+                target = {
+                    x: x - ALERT_GAP,
+                    y: y - ALERT_GAP,
+                    width: width + ALERT_GAP * 2,
+                    height: height + ALERT_GAP * 2,
+                };
+            } catch (e) {
+                // the tile left the row while the frame was travelling
+                return finish();
+            }
+
+            let p;
+            let opacity = 255;
+            if (elapsed < ALERT_HOLD_MS) {
+                p = 0;
+            } else if (elapsed < ALERT_HOLD_MS + ALERT_TRAVEL_MS) {
+                p = Easing.progress(elapsed - ALERT_HOLD_MS, ALERT_TRAVEL_MS, Easing.EASE_OUT);
+            } else if (elapsed < ALERT_HOLD_MS + ALERT_TRAVEL_MS + ALERT_SETTLE_MS) {
+                p = 1;
+            } else {
+                p = 1;
+                opacity = Math.round(255 * (1 - Easing.progress(
+                    elapsed - ALERT_HOLD_MS - ALERT_TRAVEL_MS - ALERT_SETTLE_MS,
+                    ALERT_FADE_MS, Easing.LINEAR)));
+            }
+
+            let rect = Easing.rect(monitor, target, p);
+            try {
+                frame.set_position(Math.round(rect.x), Math.round(rect.y));
+                frame.set_size(Math.max(1, Math.round(rect.width)),
+                    Math.max(1, Math.round(rect.height)));
+                frame.set_opacity(opacity);
+            } catch (e) {
+                return finish();
+            }
+            if (elapsed >= ALERT_TOTAL_MS) {
+                return finish();
+            }
+            return GLib.SOURCE_CONTINUE;
+        };
+
+        // A tile that has already left cancels the frame before its timer is
+        // even registered.
+        if (!step()) {
+            return;
+        }
+        id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, FRAME_MS, step);
+        this._animations.push(id);
+    }
+
+    // The monitor whose rectangle holds the tile's centre, in stage pixels. The
+    // alert frame starts from that monitor's border, so on a multi-monitor
+    // desktop it does not flash a screen the tile is not on.
+    _monitorRectFor(actor) {
+        let monitors = (Main.layoutManager && Main.layoutManager.monitors) || [];
+        let x = 0;
+        let y = 0;
+        try {
+            let [tx, ty] = actor.get_transformed_position();
+            let [tw, th] = actor.get_transformed_size();
+            x = tx + tw / 2;
+            y = ty + th / 2;
+        } catch (e) {
+            // the tile is gone; fall through to the primary monitor
+        }
+        for (let i = 0; i < monitors.length; i++) {
+            let monitor = monitors[i];
+            if (x >= monitor.x && x < monitor.x + monitor.width &&
+                y >= monitor.y && y < monitor.y + monitor.height) {
+                return {
+                    x: monitor.x,
+                    y: monitor.y,
+                    width: monitor.width,
+                    height: monitor.height,
+                };
+            }
+        }
+        if (Main.layoutManager && Main.layoutManager.primaryMonitor) {
+            let monitor = Main.layoutManager.primaryMonitor;
+            return {
+                x: monitor.x,
+                y: monitor.y,
+                width: monitor.width,
+                height: monitor.height,
+            };
+        }
+        return { x: 0, y: 0, width: 0, height: 0 };
+    }
+
+    // Tears down every alert frame still on screen when the applet leaves the
+    // panel. Its timers are cancelled by the caller, so no frame is touched
+    // after this.
+    _destroyFrames() {
+        let frames = this._frames;
+        this._frames = [];
+        for (let i = 0; i < frames.length; i++) {
+            try {
+                frames[i].destroy();
+            } catch (e) {
+                // the actor is gone with the screen
+            }
+        }
+    }
+
     _tileSpacing() {
         try {
             let spacing = this._tilesBox.get_theme_node().get_length("spacing");
@@ -1489,10 +1683,25 @@ class OpencodeAgentsApplet extends Applet.Applet {
     }
 
     on_applet_removed_from_panel() {
+        if (this._resizeIdle) {
+            GLib.source_remove(this._resizeIdle);
+            this._resizeIdle = 0;
+            this._resizeQueued = false;
+        }
+        for (let i = 0; i < this._panelSignals.length; i++) {
+            let entry = this._panelSignals[i];
+            try {
+                entry.actor.disconnect(entry.id);
+            } catch (e) {
+                // the actor is being torn down with us
+            }
+        }
+        this._panelSignals = [];
         for (let i = 0; i < this._animations.length; i++) {
             GLib.source_remove(this._animations[i]);
         }
         this._animations = [];
+        this._destroyFrames();
         if (this._barTimer) {
             GLib.source_remove(this._barTimer);
             this._barTimer = 0;

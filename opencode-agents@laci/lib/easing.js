@@ -39,6 +39,19 @@ function value(from, to, p) {
     return from + (to - from) * p;
 }
 
+// A rectangle part of the way from one to another, for the screen-border frame
+// that closes in on a tile. Both rectangles are { x, y, width, height } in stage
+// pixels; the result is too, with a width and height that never go negative.
+// Pure, so the test suite covers it directly.
+function rect(from, to, p) {
+    return {
+        x: value(from.x, to.x, p),
+        y: value(from.y, to.y, p),
+        width: Math.max(0, value(from.width, to.width, p)),
+        height: Math.max(0, value(from.height, to.height, p)),
+    };
+}
+
 // The working bar sweeps: a bright stretch travels the bar's length in one
 // direction and starts again, forever, the indeterminate progress indicator the
 // panel shows while an agent works. It runs in from behind the start and out
