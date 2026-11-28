@@ -172,6 +172,7 @@ class OpencodeAgentsApplet extends Applet.Applet {
         this._barTimer = 0;
         this._resizeQueued = false;
         this._resizeIdle = 0;
+        this._menuDirty = true;   // the popup is rebuilt the next time it opens
         this._panelSignals = [];  // [actor, handler id] for the panel resize watch
 
         this._tilesBox = new St.BoxLayout({
@@ -368,6 +369,7 @@ class OpencodeAgentsApplet extends Applet.Applet {
     // that starts slides in, one that leaves slides out, and tiles that stay
     // are only moved and refreshed.
     _renderTiles(model) {
+        this._healTimers();
         let appearance = [this.tilesMax, this.tileShowProject,
                           this.tileShowSubject, this.hideWhenIdle].join("|");
 
@@ -1078,6 +1080,56 @@ class OpencodeAgentsApplet extends Applet.Applet {
 
     // ---- the working bar sweep -----------------------------------------
 
+    // Cinnamon's shell can take one of the applet's own timers away exactly as it
+    // can take the monitor's: a GSource whose callback GJS is asked to run during
+    // a garbage-collection sweep is dropped, silently (see lib/monitor.js). Every
+    // timer a render depends on is therefore checked here, once per poll: a lost
+    // bar timer is forgotten so _syncBar arms a new one, and a lost cooldown is
+    // finished outright, because the sweep it was drawing is not coming back and
+    // its fill would otherwise stay on (and keep the tile held) for good.
+    _healTimers() {
+        if (this._barTimer && !this._timerAlive(this._barTimer)) {
+            this._barTimer = 0;
+        }
+        for (let id in this._cooling) {
+            let tile = this._tiles[id];
+            if (!tile) {
+                delete this._cooling[id];
+                continue;
+            }
+            if (this._timerAlive(tile._ocCoolId)) {
+                continue;
+            }
+            let index = this._animations.indexOf(tile._ocCoolId);
+            if (index >= 0) {
+                this._animations.splice(index, 1);
+            }
+            delete this._cooling[id];
+            tile._ocCoolId = 0;
+            tile._ocCooling = false;
+            tile._ocFilled = false;
+            try {
+                this._clearFill(tile._ocFill, tile);
+            } catch (e) {
+                // the tile went away underneath us
+            }
+        }
+    }
+
+    // Whether an id still names a live source in the shell's main context. An id
+    // that cannot be checked is trusted: arming a second timer is worse than a
+    // bar that is one poll late.
+    _timerAlive(id) {
+        if (!id) {
+            return false;
+        }
+        try {
+            return GLib.MainContext.default().find_source_by_id(id) !== null;
+        } catch (e) {
+            return true;
+        }
+    }
+
     // One timer drives the bar of every working tile, the indeterminate progress
     // bar that stands in for the studio's pulsing "working" dot. It runs only
     // while at least one agent works, and only with the animation setting on;
@@ -1522,8 +1574,15 @@ class OpencodeAgentsApplet extends Applet.Applet {
         this.menu.addMenuItem(this._settingsItem);
 
         this.menu.connect("open-state-changed", (menu, isOpen) => {
-            if (isOpen && this._monitor) {
-                this._monitor.refresh();
+            if (isOpen) {
+                // A closed menu was only marked dirty by the polls; this is the
+                // one rebuild that matters, then the poll keeps it current.
+                if (this._menuDirty) {
+                    this._renderMenu(this._model);
+                }
+                if (this._monitor) {
+                    this._monitor.refresh();
+                }
             }
         });
     }
@@ -1559,6 +1618,17 @@ class OpencodeAgentsApplet extends Applet.Applet {
     }
 
     _renderMenu(model) {
+        // Building the menu means creating and destroying a small widget tree
+        // (a row per server, several per session). Doing that on every poll
+        // while the menu is closed is pure churn - and the garbage it makes is
+        // what GJS was sweeping when Cinnamon lost the applet's poll timer (see
+        // lib/monitor.js). A closed menu is only marked dirty; opening it
+        // rebuilds it once from the model the next poll keeps current.
+        if (!this.menu || !this.menu.isOpen) {
+            this._menuDirty = true;
+            return;
+        }
+        this._menuDirty = false;
         let done = this._doneCount();
         this._infoItem.setLabel(this._infoLabel(model));
         this._seenItem.setSensitive(done > 0);

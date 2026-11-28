@@ -203,7 +203,7 @@ opencode-agents@laci/     the applet (installed as one directory)
   lib/procfs.js           /proc helpers (cmdline, environ, listening sockets)
   lib/discovery.js        server discovery: service file, config, /proc scan
   lib/client.js           async HTTP client for the opencode v2 API
-  lib/monitor.js          poll loop, active/blocked sweep, per-server merge
+  lib/monitor.js          poll loop (with its watchdog), active/blocked sweep, per-server merge
   lib/state.js            the tile states, colours and their transitions (pure)
   lib/format.js           tooltip/menu formatting (pure functions)
   lib/tiles.js            the tile row diff and width fit (pure)
@@ -257,13 +257,28 @@ on an OS-assigned `--port 0` port, one announced by a service file) and covers:
   idle, the recently finished conversations and the `viewed` marker that clears
   them, per-server attribution, unreachable servers isolated, duplicate sessions
   merged with the blocked report winning, live reaction to sessions starting and
-  finishing, `stop()`
+  finishing, `stop()`, and a poll timer the shell takes away being noticed by
+  the watchdog and re-armed
 - the view marker itself: that `POST /api/session/<id>/view` records
   `time.viewed` and that a view without an idle stamp is rejected - on libsoup 3
   and on libsoup 2.4
 
 ## Development notes
 
+- **The poll timer is watched, not trusted.** Cinnamon's shell can drop a
+  `GSource` whose callback GJS is asked to run during a garbage-collection sweep
+  (`Gjs-CRITICAL ... The offending callback was SourceFunc()`); a timeout lost
+  that way never fires again, and the panel then keeps showing the last world it
+  saw for the rest of the session. This is what froze the applet on a machine
+  that had been up for two days. `lib/monitor.js` keeps a second, slower timer
+  that checks the poll timer - and itself - with
+  `GLib.MainContext.default().find_source_by_id` and arms a fresh copy of
+  whichever one is gone, so a lost source costs one late poll rather than the
+  loop. The applet checks the working bar's timer and every running cooldown the
+  same way on each poll (`_healTimers`). The menu is rebuilt only while it is
+  open, never on a closed one: creating and destroying a widget tree every two
+  seconds was the garbage that the GC was sweeping when the timer went missing
+  in the first place.
 - Editing `applet.js` and reloading the applet is enough to pick up the change.
   The type argument is `APPLET`, not `applet` — a wrong name destroys the applet
   and does **not** recreate it, leaving the panel entry dead until Cinnamon is

@@ -1063,6 +1063,57 @@ async function testMonitorStop() {
     check("monitor: running flag cleared", monitor.running === false);
 }
 
+function sourceAlive(id) {
+    if (!id) {
+        return false;
+    }
+    try {
+        return GLib.MainContext.default().find_source_by_id(id) !== null;
+    } catch (e) {
+        return false;
+    }
+}
+
+// A GSource can vanish from under a running applet: GJS drops one whose callback
+// it has to run during a garbage-collection sweep ("The offending callback was
+// SourceFunc()"), which is what stopped the panel updating until Cinnamon was
+// restarted. The poll timer and its watchdog have to re-arm each other, so one
+// lost source costs one late poll instead of the rest of the session.
+async function testMonitorSurvivesALostTimer() {
+    let monitor = new Monitor(monitorOptions({
+        intervalSeconds: 1,
+        watchdogSeconds: 1,
+        discoverOptions: {
+            useService: false,
+            useProc: false,
+            extraServers: "127.0.0.1:" + env("OPENCODE_TEST_FIXED_PORT"),
+        },
+    }));
+    let count = 0;
+    monitor.onUpdate = function () { count++; };
+    monitor.start();
+    await until(function () { return count >= 1; }, 20000);
+
+    let lost = monitor._timer;
+    check("monitor: the poll timer is registered", sourceAlive(lost), String(lost));
+    GLib.source_remove(lost);
+    check("monitor: the shell took the poll timer away", !sourceAlive(lost), String(lost));
+    let afterLoss = count;
+
+    let healed = await until(function () {
+        return monitor._timer !== lost && sourceAlive(monitor._timer);
+    }, 10000);
+    check("monitor: a lost poll timer is re-armed", healed, String(monitor._timer));
+    equal("monitor: the loss is counted once", monitor._rearms, 1);
+
+    let resumed = await until(function () { return count > afterLoss; }, 10000);
+    check("monitor: polling continues after the loss", resumed, "updates: " + count);
+
+    monitor.stop();
+    equal("monitor: stop clears the poll timer", monitor._timer, 0);
+    equal("monitor: stop clears the watchdog", monitor._watchdog, 0);
+}
+
 // ------------------------------------------------------------------ main
 
 async function run() {
@@ -1093,6 +1144,7 @@ async function run() {
     await testMonitorExtraServersAndErrors();
     await testMonitorReactsToStateChanges();
     await testMonitorStop();
+    await testMonitorSurvivesALostTimer();
 
     print("");
     print(checks + " checks, " + failures + " failures");

@@ -76,10 +76,19 @@ function blockedDetail(entry) {
 
 var Monitor = class Monitor {
     // options: { intervalSeconds, metadataTtlSeconds, maxLocations,
-    //            discoverOptions, onUpdate, onError, log }
+    //            discoverOptions, onUpdate, onError, log, watchdogSeconds }
     constructor(options) {
         let opts = options || {};
         this.intervalMs = Math.max(500, (opts.intervalSeconds || 2) * 1000);
+        // The poll timer is checked by a second, slower timer: Cinnamon's shell
+        // can silently drop a GSource whose callback GJS has to run during a
+        // garbage-collection sweep (it logs "The offending callback was
+        // SourceFunc()"), and without a check the panel just stops updating for
+        // the rest of the session. Three intervals is enough to notice one lost
+        // tick without spending anything noticeable.
+        this.watchdogMs = opts.watchdogSeconds === undefined
+            ? Math.max(1000, this.intervalMs * 3)
+            : Math.max(1000, opts.watchdogSeconds * 1000);
         this.metadataTtlMs = (opts.metadataTtlSeconds === undefined ? 30 : opts.metadataTtlSeconds) * 1000;
         this.maxLocations = opts.maxLocations || 12;
         this.discoverOptions = opts.discoverOptions || {};
@@ -88,6 +97,8 @@ var Monitor = class Monitor {
         this.log = opts.log || function () {};
 
         this._timer = 0;
+        this._watchdog = 0;
+        this._rearms = 0;
         this._busy = false;
         this._stopped = true;
         this._servers = [];
@@ -114,17 +125,84 @@ var Monitor = class Monitor {
         }
         this._stopped = false;
         this.refresh();
-        this._timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, this.intervalMs, () => {
-            this.refresh();
-            return GLib.SOURCE_CONTINUE;
-        });
+        this._armPoll();
+        this._armWatchdog();
     }
 
     stop() {
         this._stopped = true;
-        if (this._timer) {
-            GLib.source_remove(this._timer);
-            this._timer = 0;
+        this._disarm("_timer");
+        this._disarm("_watchdog");
+    }
+
+    // ---- the poll loop -------------------------------------------------
+    //
+    // Both timers watch each other. A source the shell has taken away can be
+    // noticed only by a source that is still running, so whichever of the two
+    // survives a lost tick arms a fresh copy of the other - and of itself, if
+    // the id it remembers is the one that went missing.
+
+    _armPoll() {
+        this._timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, this.intervalMs, () => {
+            if (this._stopped) {
+                return GLib.SOURCE_REMOVE;
+            }
+            this.refresh();
+            this._ensureTimers("a poll");
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    _armWatchdog() {
+        this._watchdog = GLib.timeout_add(GLib.PRIORITY_DEFAULT, this.watchdogMs, () => {
+            if (this._stopped) {
+                return GLib.SOURCE_REMOVE;
+            }
+            this._ensureTimers("the watchdog");
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    _ensureTimers(who) {
+        if (!this._isArmed(this._timer)) {
+            this._armPoll();
+            this._rearms++;
+            this.log("opencode-agents: the poll timer was lost to " + who +
+                " check; re-armed (" + this.intervalMs + " ms)");
+            // The tick that went missing is not coming, so do not wait for the
+            // next one to pick the change up.
+            this.refresh();
+        }
+        if (!this._isArmed(this._watchdog)) {
+            this._armWatchdog();
+            this.log("opencode-agents: the watchdog timer was lost to " + who + " check; re-armed");
+        }
+    }
+
+    // Whether an id still names a live source in the shell's main context. A
+    // source that GJS dropped is gone from there; an id that cannot be checked
+    // is trusted, because arming a second timer is worse than one late poll.
+    _isArmed(id) {
+        if (!id) {
+            return false;
+        }
+        try {
+            return GLib.MainContext.default().find_source_by_id(id) !== null;
+        } catch (e) {
+            return true;
+        }
+    }
+
+    _disarm(slot) {
+        let id = this[slot];
+        if (!id) {
+            return;
+        }
+        this[slot] = 0;
+        try {
+            GLib.source_remove(id);
+        } catch (e) {
+            // the shell took it already
         }
     }
 
